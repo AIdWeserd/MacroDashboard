@@ -1,0 +1,18 @@
+# Core
+streamlit
+plotly
+pandas
+requests
+python-dotenv
+openpyxl    # для Excel
+fpdf2       # для PDF
+
+# Источники данных
+feedparser               # RSS-новости
+market-calendar-tool     # ForexFactory: экономический календарь
+imf-reader               # IMF WEO: страновые метрики                 # MoSPI (Индия) + pipeworx (Австралия)
+beautifulsoup4           # Парсинг NBS (Китай) + TCMB (Турция)
+pdfplumber
+rba-mcp
+fastmcp
+curl_cffi
