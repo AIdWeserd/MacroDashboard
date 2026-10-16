@@ -9,9 +9,9 @@ START_DATE = pd.Timestamp("2024-01-01")
 
 # CDID: (ключ в результирующей таблице, инвертировать знак?)
 SERIES = {
-    "HF6X": ("debt_gdp", False),
-    "A3PT": ("budget_gdp", True),
-    "AA6H": ("trade_gdp", False),
+    "a3pw": ("debt_gdp", False),  # General Government Gross Debt as % GDP
+    "ct8o": ("budget_gdp", False),  # General Government Net Lending/Borrowing as % GDP (SA)
+    "AA6H": ("trade_gdp", False),  # Current Account Balance as % GDP
 }
 
 
@@ -96,3 +96,10 @@ def fetch_uk_quarterly() -> pd.DataFrame:
 
     df["country"] = "GB"
     return df
+
+
+if __name__ == "__main__":
+    df = fetch_uk_quarterly()
+    print(f"Всего строк: {len(df)}")
+    if not df.empty:
+        print(df.tail(8).to_string(index=False))

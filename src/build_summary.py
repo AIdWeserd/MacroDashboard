@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 from src.storage import (
     load_imf, load_eurostat, load_eurostat_unemployment, load_eurostat_quarterly,
@@ -24,7 +25,7 @@ from src.storage import (
 
 COUNTRY_ORDER = [
     "US", "CN", "EU", "DE", "JP", "IN", "GB", "FR", "IT",
-    "BR", "CA", "KR", "AU", "ES", "TR", "CH", "SG",
+    "BR", "CA", "KR", "AU", "ES", "TR", "CH", "SG", "RU",
 ]
 
 COUNTRY_NAMES = {
@@ -33,7 +34,7 @@ COUNTRY_NAMES = {
     "IT": "Италия", "ES": "Испания", "CA": "Канада",
     "AU": "Австралия", "KR": "Южная Корея", "SG": "Сингапур",
     "BR": "Бразилия", "IN": "Индия", "TR": "Турция",
-    "CH": "Швейцария",
+    "CH": "Швейцария", "RU": "Россия",
 }
 
 REGION_MAP = {
@@ -54,6 +55,7 @@ REGION_MAP = {
     "ES": "Европа",
     "TR": "Европа",
     "CH": "Европа",
+    "RU": "Европа",
 }
 
 REGION_ORDER = ["Америка", "Европа", "Азия и Океания"]
@@ -135,6 +137,21 @@ def _bbg_value(df: pd.DataFrame, country: str, metric: str, cutoff: pd.Timestamp
     )
 
 
+def _bbg_period_end(period: str) -> pd.Timestamp | None:
+    """'Q4 2026' → 2026-12-31. Возвращает None, если не распарсилось."""
+    if not period:
+        return None
+    m = re.match(r"Q(\d)\s+(\d{4})", str(period).strip())
+    if not m:
+        return None
+    q = int(m.group(1))
+    year = int(m.group(2))
+    if q < 1 or q > 4:
+        return None
+    month = q * 3
+    return pd.Timestamp(year=year, month=month, day=1) + pd.offsets.MonthEnd(0)
+
+
 def _date_label(ts: pd.Timestamp) -> str:
     return f"{MONTH_NAMES[ts.month]} {ts.year}"
 
@@ -209,7 +226,7 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
             "region": REGION_MAP.get(country, "Прочее"),
         }
 
-        # IMF — fallback
+        # IMF — fallback (с пометкой источника)
         imf_date = None
         if not imf.empty:
             imf_c = imf[(imf["country"] == country) & (imf["year"] == year)]
@@ -227,17 +244,24 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 imf_date = f"{year} (IMF, год)"
 
         row["imf_date"] = imf_date
-        row["debt_gdp_date"] = imf_date
-        row["budget_gdp_date"] = imf_date
-        row["trade_gdp_date"] = imf_date
+        row["debt_gdp_date"] = f"{year} (IMF, Gen Gov)" if imf_date and row.get("debt_gdp") is not None else imf_date
+        row["budget_gdp_date"] = f"{year} (IMF, Gen Gov)" if imf_date and row.get(
+            "budget_gdp") is not None else imf_date
+        row["trade_gdp_date"] = f"{year} (IMF, Gen Gov)" if imf_date and row.get("trade_gdp") is not None else imf_date
         row["gdp_growth_date"] = imf_date
 
         # Bloomberg — только для текущего года
+        # Пропускаем BBG-значения за незавершённые кварталы
         if not is_finished_year:
             for metric in BBG_METRICS:
                 b_val, b_date, b_period, b_src = _bbg_value(bbg, country, metric, cutoff)
                 if b_val is None:
                     continue
+
+                period_end = _bbg_period_end(b_period)
+                if period_end is not None and period_end > cutoff:
+                    continue
+
                 current_date = row.get(f"{metric}_date")
                 is_imf = isinstance(current_date, str) and "IMF" in current_date
                 is_empty = row.get(metric) is None
@@ -316,8 +340,13 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 row["gdp_growth"] = round(val, 2)
                 row["gdp_growth_date"] = _quarter_label(dt)
 
-        # Великобритания — ONS
+        # Великобритания — ONS (всё General Gov)
         if country == "GB" and not uk_quarterly.empty:
+            GB_LABEL = {
+                "debt_gdp": "ONS, Gen Gov",
+                "budget_gdp": "ONS, Gen Gov",
+                "trade_gdp": "ONS, Current Account",
+            }
             for col, date_col in [
                 ("debt_gdp", "debt_gdp_date"),
                 ("budget_gdp", "budget_gdp_date"),
@@ -326,14 +355,46 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 val, dt = _last_quarterly_value(uk_quarterly, "GB", col, cutoff)
                 if val is not None:
                     row[col] = round(val, 2)
-                    row[date_col] = _quarter_label(dt)
+                    label = GB_LABEL[col]
+                    row[date_col] = f"{_quarter_label(dt)} ({label})"
 
-        # Япония — MOF Central Government
-        if country == "JP" and not japan_quarterly.empty:
-            val, dt = _last_quarterly_value(japan_quarterly, "JP", "debt_gdp", cutoff)
-            if val is not None:
-                row["debt_gdp"] = round(val, 2)
-                row["debt_gdp_date"] = f"{_quarter_label(dt)} (Central Gov)"
+        # Великобритания — декабрь → годовое General Gov (IMF)
+        if country == "GB" and month == 12 and not imf.empty:
+            for metric, metric_key in [
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+            ]:
+                imf_gb = imf[
+                    (imf["country"] == "GB") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == metric_key)
+                    ]
+                if not imf_gb.empty:
+                    val = imf_gb.iloc[0]["value"]
+                    if pd.notna(val):
+                        row[metric] = round(float(val), 2)
+                        row[f"{metric}_date"] = f"{year} (IMF, Gen Gov)"
+
+        # Япония — квартальный MOF (Central Gov) + годовой IMF (Gen Gov)
+        if country == "JP":
+            if not japan_quarterly.empty:
+                val, dt = _last_quarterly_value(japan_quarterly, "JP", "debt_gdp", cutoff)
+                if val is not None:
+                    row["debt_gdp"] = round(val, 2)
+                    row["debt_gdp_date"] = f"{_quarter_label(dt)} (Central Gov)"
+
+            if month == 12 and not imf.empty:
+                imf_jp = imf[
+                    (imf["country"] == "JP") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == "DEBT_GDP")
+                    ]
+                if not imf_jp.empty:
+                    val = imf_jp.iloc[0]["value"]
+                    if pd.notna(val):
+                        row["debt_gdp"] = round(float(val), 2)
+                        row["debt_gdp_date"] = f"{year} (IMF, Gen Gov)"
 
         # Южная Корея — долг/ВВП (IMF DSBB, Central Gov)
         if country == "KR" and not korea_quarterly.empty:
@@ -349,6 +410,24 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 row["trade_gdp"] = round(val, 2)
                 row["trade_gdp_date"] = f"{_quarter_label(dt)} (ABS, Current Account)"
 
+        # Австралия — декабрь → годовое General Gov (IMF)
+        if country == "AU" and month == 12 and not imf.empty:
+            for metric, metric_key in [
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+            ]:
+                imf_au = imf[
+                    (imf["country"] == "AU") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == metric_key)
+                    ]
+                if not imf_au.empty:
+                    val = imf_au.iloc[0]["value"]
+                    if pd.notna(val):
+                        row[metric] = round(float(val), 2)
+                        row[f"{metric}_date"] = f"{year} (IMF, Gen Gov)"
+
         # Швейцария — Трейд/ВВП (SNB + SECO)
         if country == "CH" and not switzerland_quarterly.empty:
             val, dt = _last_quarterly_value(switzerland_quarterly, "CH", "trade_gdp", cutoff)
@@ -356,15 +435,37 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 row["trade_gdp"] = round(val, 2)
                 row["trade_gdp_date"] = f"{_quarter_label(dt)} (SNB, Current Account)"
 
-        # Швейцария — SECO (рост ВВП)
         if country == "CH" and not switzerland_gdp.empty:
             val, dt = _last_quarterly_value(switzerland_gdp, "CH", "gdp_growth", cutoff)
             if val is not None:
                 row["gdp_growth"] = round(val, 2)
                 row["gdp_growth_date"] = _quarter_label(dt)
 
-        # Канада — долг/бюджет/трейд (StatCan WDS)
+        # Швейцария — декабрь → годовое General Gov (IMF)
+        if country == "CH" and month == 12 and not imf.empty:
+            for metric, metric_key in [
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+            ]:
+                imf_ch = imf[
+                    (imf["country"] == "CH") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == metric_key)
+                    ]
+                if not imf_ch.empty:
+                    val = imf_ch.iloc[0]["value"]
+                    if pd.notna(val):
+                        row[metric] = round(float(val), 2)
+                        row[f"{metric}_date"] = f"{year} (IMF, Gen Gov)"
+
+        # Канада — StatCan (General Gov)
         if country == "CA" and not canada_quarterly.empty:
+            CA_LABEL = {
+                "debt_gdp": "StatCan, Gen Gov",
+                "budget_gdp": "StatCan, Gen Gov, NSA",
+                "trade_gdp": "StatCan, Current Account",
+            }
             for col, date_col in [
                 ("debt_gdp", "debt_gdp_date"),
                 ("budget_gdp", "budget_gdp_date"),
@@ -373,25 +474,41 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 val, dt = _last_quarterly_value(canada_quarterly, "CA", col, cutoff)
                 if val is not None:
                     row[col] = round(val, 2)
-                    row[date_col] = _quarter_label(dt)
+                    label = CA_LABEL[col]
+                    row[date_col] = f"{_quarter_label(dt)} ({label})"
 
-        # Сингапур — рост ВВП
+        # Канада — декабрь → годовое General Gov (IMF)
+        if country == "CA" and month == 12 and not imf.empty:
+            for metric, metric_key in [
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+            ]:
+                imf_ca = imf[
+                    (imf["country"] == "CA") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == metric_key)
+                    ]
+                if not imf_ca.empty:
+                    val = imf_ca.iloc[0]["value"]
+                    if pd.notna(val):
+                        row[metric] = round(float(val), 2)
+                        row[f"{metric}_date"] = f"{year} (IMF, Gen Gov)"
+
+        # Сингапур
         if country == "SG" and not sg_gdp.empty:
             val, dt = _last_quarterly_value(sg_gdp, "SG", "gdp_growth", cutoff)
             if val is not None:
                 row["gdp_growth"] = round(val, 2)
                 row["gdp_growth_date"] = _quarter_label(dt)
 
-        # Сингапур — долг/бюджет/трейд
         if country == "SG" and not singapore_quarterly.empty:
             SG_LABEL = {
                 "debt_gdp": "Central Gov",
-                "budget_gdp": "Central Gov",
                 "trade_gdp": "Current Account",
             }
             for col, date_col in [
                 ("debt_gdp", "debt_gdp_date"),
-                ("budget_gdp", "budget_gdp_date"),
                 ("trade_gdp", "trade_gdp_date"),
             ]:
                 val, dt = _last_quarterly_value(singapore_quarterly, "SG", col, cutoff)
@@ -400,19 +517,51 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                     label = SG_LABEL[col]
                     row[date_col] = f"{_quarter_label(dt)} ({label})" if label else _quarter_label(dt)
 
-        # Бразилия — рост ВВП
+            # budget_gdp — SingStat NSA, сильно сезонный + знак неоднозначен.
+            # Используем IMF годовое для всех периодов.
+            if not imf.empty:
+                imf_sg_budget = imf[
+                    (imf["country"] == "SG") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == "BUDGET_GDP")
+                    ]
+                if not imf_sg_budget.empty:
+                    val = imf_sg_budget.iloc[0]["value"]
+                    if pd.notna(val):
+                        row["budget_gdp"] = round(float(val), 2)
+                        row["budget_gdp_date"] = f"{year} (IMF, Gen Gov)"
+
+        # Сингапур — декабрь → годовое General Gov (IMF)
+        if country == "SG" and month == 12 and not imf.empty:
+            for metric, metric_key in [
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+            ]:
+                imf_sg = imf[
+                    (imf["country"] == "SG") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == metric_key)
+                    ]
+                if not imf_sg.empty:
+                    val = imf_sg.iloc[0]["value"]
+                    if pd.notna(val):
+                        row[metric] = round(float(val), 2)
+                        row[f"{metric}_date"] = f"{year} (IMF, Gen Gov)"
+
+        # Бразилия — рост ВВП (IBGE SIDRA)
         if country == "BR" and not br_gdp.empty:
             val, dt = _last_quarterly_value(br_gdp, "BR", "gdp_growth", cutoff)
             if val is not None:
                 row["gdp_growth"] = round(val, 2)
                 row["gdp_growth_date"] = _quarter_label(dt)
 
-        # Бразилия — долг и трейд
+        # Бразилия — долг и трейд (BCB, General Gov / Current Account)
         if country == "BR" and not brazil_quarterly.empty:
             val, dt = _last_quarterly_value(brazil_quarterly, "BR", "debt_gdp", cutoff)
             if val is not None:
                 row["debt_gdp"] = round(val, 2)
-                row["debt_gdp_date"] = _quarter_label(dt)
+                row["debt_gdp_date"] = f"{_quarter_label(dt)} (BCB, Gen Gov)"
 
             val, dt = _last_quarterly_value(brazil_quarterly, "BR", "trade_gdp", cutoff)
             if val is not None:
@@ -423,6 +572,24 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 row["budget_gdp"] = None
                 row["budget_gdp_date"] = None
 
+        # Бразилия — декабрь → годовое General Gov (IMF)
+        if country == "BR" and month == 12 and not imf.empty:
+            for metric, metric_key in [
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+            ]:
+                imf_br = imf[
+                    (imf["country"] == "BR") &
+                    (imf["year"] == year) &
+                    (imf["metric"] == metric_key)
+                    ]
+                if not imf_br.empty:
+                    val = imf_br.iloc[0]["value"]
+                    if pd.notna(val):
+                        row[metric] = round(float(val), 2)
+                        row[f"{metric}_date"] = f"{year} (IMF, Gen Gov)"
+
         # Индия — рост ВВП
         if country == "IN" and not india_gdp.empty:
             val, dt = _last_quarterly_value(india_gdp, "IN", "gdp_growth", cutoff)
@@ -430,7 +597,7 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 row["gdp_growth"] = round(val, 2)
                 row["gdp_growth_date"] = _quarter_label(dt)
 
-        # Китай — долг: квартальный NIFD + годовой General Gov (FRED / IMF)
+        # Китай — долг
         if country == "CN":
             if not china_debt.empty:
                 val, dt = _last_quarterly_value(china_debt, "CN", "debt_gdp", cutoff)
@@ -477,7 +644,6 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                     label = CN_LABEL[col]
                     row[date_col] = f"{_quarter_label(dt)} ({label})" if label else _quarter_label(dt)
 
-        # Китай — для декабря бюджет → годовой General Gov (IMF)
         if country == "CN" and month == 12 and not imf.empty:
             imf_cn = imf[
                 (imf["country"] == "CN") &
@@ -487,19 +653,16 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
             if not imf_cn.empty:
                 val = imf_cn.iloc[0]["value"]
                 if pd.notna(val):
-                    row["budget_gdp"] = round(float(val), 2)
+                    row["budget_gdp"] = round(val, 2)
                     row["budget_gdp_date"] = f"{year} (IMF, Gen Gov)"
 
-        # Китай — рост ВВП
         if country == "CN" and not china_gdp.empty:
             val, dt = _last_quarterly_value(china_gdp, "CN", "gdp_growth", cutoff)
             if val is not None:
                 row["gdp_growth"] = round(val, 2)
                 row["gdp_growth_date"] = _quarter_label(dt)
 
-        # ============================================================
         # ИНФЛЯЦИЯ
-        # ============================================================
         row["inflation"] = None
         row["inflation_date"] = None
         row["inflation_mom"] = None
@@ -586,7 +749,7 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
         if row["inflation"] is None and country == "CA" and not cpi_ca.empty:
             ca_row = _last_inflation_row(cpi_ca, country, cutoff)
             if ca_row is not None:
-                row["inflation"] = round(ca_row["value"], 2) if pd.notna(ca_row.get("value")) else None
+                row["inflation"] = round(ca_row["value"], 2)
                 row["inflation_date"] = _date_label(ca_row["date"])
                 if pd.notna(ca_row.get("mom")):
                     row["inflation_mom"] = round(ca_row["mom"], 2)
@@ -672,9 +835,7 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
             if row["inflation"] is not None:
                 row["inflation_date"] = f"{year} (IMF, год)"
 
-        # ============================================================
         # БЕЗРАБОТИЦА
-        # ============================================================
         row["unemployment"] = None
         row["unemployment_date"] = None
 
@@ -735,9 +896,7 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
                 row["unemployment"] = round(last["value"], 2)
                 row["unemployment_date"] = _date_label(last["date"])
 
-        # ============================================================
         # СТАВКА ЦБ
-        # ============================================================
         row["policy_rate"] = None
         row["policy_rate_date"] = None
 
@@ -750,7 +909,25 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
             if not pr.empty:
                 last = pr.iloc[-1]
                 row["policy_rate"] = round(last["rate"], 2)
-                row["policy_rate_date"] = _date_label(last["date"])
+                date_label = _date_label(last["date"])
+                # Индия, Корея, Турция — FRED/OECD (3-month interbank),
+                # не официальные ставки ЦБ
+                if country in ("IN", "KR", "TR"):
+                    date_label = f"{date_label} (FRED, OECD)"
+                elif country == "RU":
+                    date_label = f"{date_label} (ЦБ РФ)"
+                row["policy_rate_date"] = date_label
+
+        # RU: пока подтверждена только ключевая ставка ЦБ РФ.
+        # Остальные показатели заполняем после проверки официальных источников.
+        if country == "RU":
+            for metric in (
+                    "inflation", "inflation_mom", "inflation_core",
+                    "gdp_growth", "unemployment", "debt_gdp",
+                    "budget_gdp", "trade_gdp",
+            ):
+                row[metric] = None
+                row[f"{metric}_date"] = None
 
         rows.append(row)
 

@@ -14,7 +14,7 @@ BLOOMBERG_DIR = DATA_DIR / "bloomberg"
 NIFD_DIR = DATA_DIR / "nifd_reports"
 
 # Сколько дней хранить
-BLOOMBERG_KEEP_DAYS = 30
+BLOOMBERG_KEEP_DAYS = 180
 NIFD_KEEP_DAYS = 90
 
 

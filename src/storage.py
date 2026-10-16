@@ -435,10 +435,43 @@ def load_india_unemployment() -> pd.DataFrame:
 
 
 # ============================================================
-# Индия — CPI
+# Индия — CPI, с накоплением
 # ============================================================
 def save_india_cpi(df: pd.DataFrame):
-    _save_df(df, "india_cpi")
+    if df.empty:
+        print("[SKIP] india_cpi: пустой DataFrame")
+        return
+
+    with _connect() as con:
+        try:
+            existing = pd.read_sql("SELECT * FROM india_cpi", con)
+        except Exception:
+            existing = pd.DataFrame()
+
+        if not existing.empty:
+            existing["date"] = pd.to_datetime(existing["date"])
+            new = df.copy()
+            new["date"] = pd.to_datetime(new["date"])
+
+            combined = pd.concat([existing, new], ignore_index=True)
+
+            def _last_notna(s):
+                s = s.dropna()
+                return s.iloc[-1] if not s.empty else None
+
+            combined = combined.groupby("date", as_index=False).agg({
+                "country": "first",
+                "value": _last_notna,
+                "mom": _last_notna,
+                "core": _last_notna,
+            })
+        else:
+            combined = df.copy()
+
+        combined = combined.sort_values("date").reset_index(drop=True)
+        combined.to_sql("india_cpi", con, if_exists="replace", index=False)
+
+    print(f"[SAVE] india_cpi: {len(combined)} строк (обновлено {len(df)})")
 
 
 def load_india_cpi() -> pd.DataFrame:
