@@ -10,11 +10,11 @@ START_DATE = pd.Timestamp("2024-01-01")
 
 # === FRED-серии: (страна, series_id) ===
 FRED_SERIES = {
-    "US": "DFEDTARU",           # Fed Funds Target Range, Upper
-    "EU": "ECBDFR",              # ECB Deposit Facility Rate
-    "KR": "IR3TIB01KRM156N",     # Korea 3-month interbank rate
-    "TR": "INTDSRTRM193N",       # CBRT Policy Rate
-    "JP": "INTDSRJPM193N",       # BoJ Discount Rate (fallback)
+    "US": "DFEDTARU",  # Fed Funds Target Range, Upper
+    "EU": "ECBDFR",  # ECB Deposit Facility Rate
+    "KR": "IR3TIB01KRM156N",  # Korea 3-month interbank rate
+    "TR": "INTDSRTRM193N",  # CBRT Policy Rate
+    "JP": "INTDSRJPM193N",  # BoJ Discount Rate (fallback)
 }
 
 
@@ -366,6 +366,66 @@ def fetch_policy_rate_in() -> pd.DataFrame:
 
 
 # ============================================================
+# RU — Банк России, ключевая ставка
+# ============================================================
+def fetch_policy_rate_ru() -> pd.DataFrame:
+    """Ключевая ставка Банка России, месячные значения с 2024 года."""
+    url = "https://www.cbr.ru/hd_base/KeyRate/"
+    params = {
+        "UniDbQuery.Posted": "True",
+        "UniDbQuery.From": "01.01.2024",
+        "UniDbQuery.To": pd.Timestamp.today().strftime("%d.%m.%Y"),
+    }
+
+    response = requests.get(
+        url,
+        params=params,
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    tables = pd.read_html(
+        io.StringIO(response.text),
+        decimal=",",
+        thousands=" ",
+    )
+    if not tables:
+        return pd.DataFrame()
+
+    df = tables[0].rename(
+        columns={"Дата": "date", "Ставка": "value"}
+    )
+
+    if not {"date", "value"}.issubset(df.columns):
+        raise ValueError("ЦБ РФ: изменился формат таблицы ставки")
+
+    df["date"] = pd.to_datetime(
+        df["date"], format="%d.%m.%Y", errors="coerce"
+    )
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    df = (
+    df.dropna(subset=["date", "value"])
+    .sort_values("date")
+    .reset_index(drop=True)
+)
+
+    if df.empty:
+        return pd.DataFrame()
+
+    if not df["value"].between(0, 100).all():
+        raise ValueError("ЦБ РФ: некорректный масштаб ставки")
+
+    df = _monthly_last_known(df[["date", "value"]])
+    df = df[df["date"] >= START_DATE].reset_index(drop=True)
+    df["country"] = "RU"
+
+    return df[["date", "country", "value"]].rename(
+        columns={"value": "rate"}
+    )
+
+
+# ============================================================
 # Объединение: все страны
 # ============================================================
 def fetch_policy_rates() -> pd.DataFrame:
@@ -452,6 +512,17 @@ def fetch_policy_rates() -> pd.DataFrame:
             print(f"[OK] IN/FRED: {len(ind)} месяцев")
     except Exception as e:
         print(f"[ERR] IN/FRED: {e}")
+
+    # RU — Банк России
+    try:
+        ru = fetch_policy_rate_ru()
+        if not ru.empty:
+            frames.append(ru)
+            print(f"[OK] RU/CBR: {len(ru)} месяцев")
+        else:
+            print("[WARN] RU/CBR: нет данных")
+    except Exception as e:
+        print(f"[ERR] RU/CBR: {e}")
 
     if not frames:
         return pd.DataFrame()

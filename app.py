@@ -3,11 +3,15 @@ import streamlit as st
 import pandas as pd
 from config import COUNTRIES, INDICATORS
 from src.storage import (
-    load_fred, load_rss, load_forexfactory, save_forexfactory, load_imf,
+    load_fred, load_rss, load_forexfactory, load_imf,
     load_eurostat, load_eurostat_unemployment,
     load_policy_rates,
+    load_bloomberg,
 )
-from src.build_summary import build_summary, COUNTRY_NAMES, MONTH_NAMES
+from src.build_summary import (
+    build_summary, COUNTRY_NAMES, MONTH_NAMES,
+    REGION_MAP, REGION_ORDER,
+)
 from src.snapshot import (
     save_weekly_snapshot, load_previous_snapshot,
     compare_with_previous, SUMMARY_METRICS,
@@ -33,6 +37,22 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Macro")
+
+        from openpyxl.styles import Alignment
+        ws = writer.sheets["Macro"]
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        for col_cells in ws.columns:
+            max_len = 0
+            col_letter = col_cells[0].column_letter
+            for cell in col_cells:
+                if cell.value:
+                    for line in str(cell.value).split("\n"):
+                        max_len = max(max_len, len(line))
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 40)
+
     return buf.getvalue()
 
 
@@ -43,51 +63,104 @@ def to_html_bytes(df: pd.DataFrame) -> bytes:
 
 def to_pdf_bytes(df: pd.DataFrame) -> bytes:
     try:
-        from fpdf import FPDF
+        from playwright.sync_api import sync_playwright
     except ImportError:
+        print("[PDF] Playwright не установлен.")
         return b""
 
-    def translit(s: str) -> str:
-        table = {
-            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e",
-            "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k",
-            "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r",
-            "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
-            "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "",
-            "э": "e", "ю": "yu", "я": "ya", "—": "-",
-        }
-        return "".join(table.get(c.lower(), c) for c in s)
+    from datetime import datetime
 
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=8)
+    df_html = df.copy()
+    for col in df_html.columns:
+        df_html[col] = df_html[col].apply(
+            lambda x: str(x).replace("\n", "<br>") if pd.notna(x) else ""
+        )
 
-    cols = [translit(str(c)) for c in df.columns]
-    col_width = (pdf.w - 20) / max(len(cols), 1)
+    table_html = df_html.to_html(
+        index=False,
+        escape=False,
+        border=0,
+        classes="macro-table",
+    )
 
-    for c in cols:
-        pdf.cell(col_width, 6, c[:20], border=1)
-    pdf.ln()
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-    for _, row in df.iterrows():
-        for val in row:
-            txt = translit(str(val)).replace("\n", " ")
-            pdf.cell(col_width, 6, txt[:20], border=1)
-        pdf.ln()
+    html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<style>
+    @page {{ size: A4 landscape; margin: 10mm; }}
+    * {{ box-sizing: border-box; }}
+    body {{
+        font-family: "Arial", "DejaVu Sans", sans-serif;
+        font-size: 9px;
+        color: #222;
+        margin: 0;
+        padding: 0;
+    }}
+    h1 {{ font-size: 14px; margin: 0 0 4px 0; }}
+    .meta {{ font-size: 8px; color: #666; margin-bottom: 8px; }}
+    table.macro-table {{
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }}
+    table.macro-table th {{
+        background-color: #f0f0f0;
+        border: 1px solid #999;
+        padding: 4px 5px;
+        font-size: 9px;
+        text-align: center;
+        vertical-align: middle;
+        word-wrap: break-word;
+    }}
+    table.macro-table td {{
+        border: 1px solid #bbb;
+        padding: 3px 5px;
+        font-size: 8.5px;
+        vertical-align: top;
+        word-wrap: break-word;
+    }}
+    table.macro-table tr:nth-child(even) td {{ background-color: #fafafa; }}
+    table.macro-table td:first-child {{
+        font-weight: bold;
+        text-align: left;
+        white-space: nowrap;
+        width: 100px;
+    }}
+</style>
+</head>
+<body>
+    <h1>Макро-дашборд — сводная таблица</h1>
+    <div class="meta">Сформировано: {now_str}. Источники: IMF WEO, Eurostat, FRED, BEA, Treasury, национальные службы, Bloomberg.</div>
+    {table_html}
+</body>
+</html>
+"""
 
-    return bytes(pdf.output())
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.set_content(html, wait_until="load")
+            pdf_bytes = page.pdf(
+                format="A4",
+                landscape=True,
+                print_background=True,
+                margin={"top": "10mm", "bottom": "10mm", "left": "10mm", "right": "10mm"},
+            )
+            browser.close()
+        return pdf_bytes
+    except Exception as e:
+        print(f"[PDF] Ошибка Playwright: {e}")
+        return b""
 
 
 # ============================================================
-# Хелпер: value_if_in_period
+# value_if_in_period (для таблицы "без дат")
 # ============================================================
 def parse_date_label(date_label: str) -> tuple[str, int] | None:
-    """
-    Парсит date_label. Возвращает (тип, номер) или None.
-    - ("month", YYYYMM) — "авг 2026"
-    - ("quarter", YYYYQQ) — "Q2 2026"
-    - ("year", YYYY) — "2026 (IMF, год)"
-    """
     if not date_label:
         return None
     s = str(date_label).strip()
@@ -122,9 +195,6 @@ def parse_date_label(date_label: str) -> tuple[str, int] | None:
 
 
 def value_if_in_period(value, date_label, target_year, target_month) -> str:
-    """
-    Показывает значение, если его период завершился не позже выбранного месяца.
-    """
     if pd.isna(value) or value is None:
         return "—"
 
@@ -136,29 +206,35 @@ def value_if_in_period(value, date_label, target_year, target_month) -> str:
     target_month_num = target_year * 100 + target_month
 
     if kind == "month":
-        if num == target_month_num:
-            return f"{value:.2f}"
-        return "—"
+        return f"{value:.2f}" if num == target_month_num else "—"
 
     if kind == "quarter":
         q_year = num // 10
         q_num = num % 10
         q_end_month = q_num * 3
         q_end = q_year * 100 + q_end_month
-        if q_end <= target_month_num:
-            return f"{value:.2f}"
-        return "—"
+        return f"{value:.2f}" if q_end <= target_month_num else "—"
 
     if kind == "year":
-        if num <= target_year:
-            return f"{value:.2f}"
-        return "—"
+        return f"{value:.2f}" if num <= target_year else "—"
 
     return "—"
 
 
 # ============================================================
-# ГЛАВНАЯ: Сводная таблица
+# Слияние значения и даты в ячейке ("5.26 · Q4 2026 (BBG)")
+# ============================================================
+def merge_value_date(value, date) -> str:
+    if pd.isna(value) or value is None:
+        return "—"
+    val_str = f"{value:.2f}"
+    if date is None or (isinstance(date, float) and pd.isna(date)):
+        return val_str
+    return f"{val_str} · {date}"
+
+
+# ============================================================
+# ГЛАВНАЯ
 # ============================================================
 st.subheader("🌍 Сводная таблица по странам")
 
@@ -181,9 +257,6 @@ MONTH_OPTIONS = {
     9: "сен", 10: "окт", 11: "ноя", 12: "дек",
 }
 
-# ============================================================
-# ФИЛЬТРЫ ПЕРВОЙ ТАБЛИЦЫ
-# ============================================================
 col_year, col_month = st.columns(2)
 with col_year:
     selected_year = st.selectbox(
@@ -201,77 +274,107 @@ with col_month:
     )
     selected_month = [k for k, v in MONTH_OPTIONS.items() if v == selected_month_name][0]
 
+# Регион — pills, как метрики
+selected_regions = st.pills(
+    "Регион",
+    options=REGION_ORDER,
+    default=REGION_ORDER,
+    selection_mode="multi",
+    key="summary_region",
+)
+if not selected_regions:
+    selected_regions = REGION_ORDER
+
 summary = build_summary(year=selected_year, month=selected_month)
 
 if summary.empty:
     st.warning("Нет данных. Запусти: python scheduler.py")
 else:
+    summary = summary[summary["region"].isin(selected_regions)].reset_index(drop=True)
+
     previous = load_previous_snapshot()
     changed = compare_with_previous(summary, previous)
 
-    display = summary[[
-        "country", "country_name",
-        "inflation", "inflation_date",
-        "inflation_mom", "inflation_mom_date",
-        "inflation_core", "inflation_core_date",
-        "unemployment", "unemployment_date",
-        "debt_gdp", "debt_gdp_date",
-        "budget_gdp", "budget_gdp_date",
-        "trade_gdp", "trade_gdp_date",
-        "gdp_growth", "gdp_growth_date",
-        "policy_rate", "policy_rate_date",
-    ]].copy()
+    display = summary.copy()
 
-
-    def merge_value_date(value, date):
-        if pd.isna(value) or value is None:
-            return "—"
-        val_str = f"{value:.2f}"
-        if date:
-            return f"{val_str}\n{date}"
-        return val_str
-
-
-    display["Инфляция"] = [merge_value_date(v, d) for v, d in zip(display["inflation"], display["inflation_date"])]
-    display["Инфляция MoM"] = [merge_value_date(v, d) for v, d in
-                               zip(display["inflation_mom"], display["inflation_mom_date"])]
-    display["Core"] = [merge_value_date(v, d) for v, d in
-                       zip(display["inflation_core"], display["inflation_core_date"])]
-    display["Безработица"] = [merge_value_date(v, d) for v, d in
-                              zip(display["unemployment"], display["unemployment_date"])]
-    display["Долг/ВВП"] = [merge_value_date(v, d) for v, d in zip(display["debt_gdp"], display["debt_gdp_date"])]
-    display["Бюджет/ВВП"] = [merge_value_date(v, d) for v, d in zip(display["budget_gdp"], display["budget_gdp_date"])]
-    display["Трейд/ВВП"] = [merge_value_date(v, d) for v, d in zip(display["trade_gdp"], display["trade_gdp_date"])]
-    display["Рост ВВП"] = [merge_value_date(v, d) for v, d in zip(display["gdp_growth"], display["gdp_growth_date"])]
-    display["Ставка"] = [merge_value_date(v, d) for v, d in zip(display["policy_rate"], display["policy_rate_date"])]
+    # Сливаем значение + дату в одну ячейку
+    display["Ставка ЦБ, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["policy_rate"], display["policy_rate_date"])
+    ]
+    display["Инфляция YoY, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["inflation"], display["inflation_date"])
+    ]
+    display["Инфляция MoM, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["inflation_mom"], display["inflation_mom_date"])
+    ]
+    display["Core CPI YoY, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["inflation_core"], display["inflation_core_date"])
+    ]
+    display["Рост ВВП, % YoY"] = [
+        merge_value_date(v, d) for v, d in zip(display["gdp_growth"], display["gdp_growth_date"])
+    ]
+    display["Безработица, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["unemployment"], display["unemployment_date"])
+    ]
+    display["Долг/ВВП, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["debt_gdp"], display["debt_gdp_date"])
+    ]
+    display["Бюджет/ВВП, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["budget_gdp"], display["budget_gdp_date"])
+    ]
+    display["Трейд/ВВП, %"] = [
+        merge_value_date(v, d) for v, d in zip(display["trade_gdp"], display["trade_gdp_date"])
+    ]
 
     display = display.rename(columns={"country_name": "Страна"})
 
-    ALL_METRIC_COLS = [
-        "Инфляция", "Инфляция MoM", "Core",
-        "Безработица",
-        "Долг/ВВП", "Бюджет/ВВП", "Трейд/ВВП",
-        "Рост ВВП",
-        "Ставка",
+    # Порядок колонок и фильтров — синхронный
+    METRIC_COLS = [
+        "Ставка ЦБ, %",
+        "Инфляция YoY, %",
+        "Инфляция MoM, %",
+        "Core CPI YoY, %",
+        "Рост ВВП, % YoY",
+        "Безработица, %",
+        "Долг/ВВП, %",
+        "Бюджет/ВВП, %",
+        "Трейд/ВВП, %",
     ]
 
-    # ============================================================
-    # ФИЛЬТРЫ КОЛОНОК через st.pills (галочки)
-    # ============================================================
     selected_cols = st.pills(
-        "Какие метрики показывать (таблица с датами)",
-        options=ALL_METRIC_COLS,
-        default=ALL_METRIC_COLS,
+        "Какие метрики показывать",
+        options=METRIC_COLS,
+        default=METRIC_COLS,
         selection_mode="multi",
         key="summary_cols_pills",
     )
     if not selected_cols:
-        selected_cols = ALL_METRIC_COLS
+        selected_cols = METRIC_COLS
 
-    display_with_dates = display[["country", "Страна"] + selected_cols].copy()
+    display_with_dates = display[["country", "Страна"]].copy()
+    for c in METRIC_COLS:
+        if c in selected_cols:
+            display_with_dates[c] = display[c]
 
     metric_to_key = {human: key for key, human in SUMMARY_METRICS}
-    highlight_color = "background-color: #ccffcc"
+    highlight_color_changed = "background-color: #fff3b0"
+    highlight_color_bbg = "background-color: #ffcccc"
+
+    # BBG-подсветка — только для тех ячеек, где реально применилось
+    # значение из Bloomberg для выбранного года/месяца.
+    # Определяем по метке *_date, содержащей "(BBG)".
+    bbg_set: set[tuple[str, str]] = set()
+    for _, r in summary.iterrows():
+        country = str(r["country"])
+        for col in summary.columns:
+            if not col.endswith("_date"):
+                continue
+            metric = col[:-len("_date")]
+            val = r[col]
+            if val is None or pd.isna(val):
+                continue
+            if "(BBG)" in str(val):
+                bbg_set.add((country, metric))
 
 
     def highlight_row(row):
@@ -283,8 +386,10 @@ else:
             metric_key = metric_to_key.get(col)
             if metric_key is None:
                 continue
-            if (country, metric_key) in changed:
-                styles[i] = highlight_color
+            if (country, metric_key) in bbg_set:
+                styles[i] = highlight_color_bbg
+            elif (country, metric_key) in changed:
+                styles[i] = highlight_color_changed
         return styles
 
 
@@ -294,26 +399,48 @@ else:
         styled,
         width='stretch',
         hide_index=True,
-        column_config={"country": None},
+        column_config={
+            "country": None,
+            "Страна": st.column_config.TextColumn("Страна", width="small"),
+            "Ставка ЦБ, %": st.column_config.TextColumn("Ставка ЦБ, %", width="small"),
+            "Инфляция YoY, %": st.column_config.TextColumn("Инфляция YoY, %", width="small"),
+            "Инфляция MoM, %": st.column_config.TextColumn("Инфляция MoM, %", width="small"),
+            "Core CPI YoY, %": st.column_config.TextColumn("Core CPI YoY, %", width="small"),
+            "Рост ВВП, % YoY": st.column_config.TextColumn("Рост ВВП, % YoY", width="small"),
+            "Безработица, %": st.column_config.TextColumn("Безработица, %", width="small"),
+            "Долг/ВВП, %": st.column_config.TextColumn("Долг/ВВП, %", width="medium"),
+            "Бюджет/ВВП, %": st.column_config.TextColumn("Бюджет/ВВП, %", width="medium"),
+            "Трейд/ВВП, %": st.column_config.TextColumn("Трейд/ВВП, %", width="medium"),
+        },
     )
 
-    if changed:
-        st.caption(f"🟢 Зелёным подсвечены {len(changed)} обновившихся метрик относительно снимка недельной давности.")
-    else:
+    bbg_count = len(bbg_set)
+    changed_count = len(changed)
+
+    parts = []
+    if bbg_count:
+        parts.append(
+            f"🔴 Красным — {bbg_count} метрик из Bloomberg "
+            f"(методология может отличаться от IMF/национальных источников)."
+        )
+    if changed_count:
+        parts.append(f"🟡 Жёлтым — {changed_count} обновившихся метрик за неделю.")
+    if not bbg_count and not changed_count:
         if previous.empty:
-            st.caption("📸 Прошлый снимок ещё не накоплен — подсветка появится после следующей недели.")
+            parts.append("📸 Прошлый снимок ещё не накоплен.")
         else:
-            st.caption("🟢 Свежих изменений относительно прошлого снимка нет.")
+            parts.append("Свежих изменений нет.")
+
+    for p in parts:
+        st.caption(p)
 
     # ============================================================
-    # ВТОРАЯ ТАБЛИЦА — со своими фильтрами
+    # ВТОРАЯ ТАБЛИЦА — без дат
     # ============================================================
     st.markdown("---")
     st.subheader("🔢 Таблица без дат (только значения)")
     st.caption(
-        "Показаны значения, чей период **завершился не позже выбранного месяца**: "
-        "месячные — точно в этом месяце; квартальные — если квартал закончился; "
-        "годовые — если год уже прошёл."
+        "Показаны значения, чей период **завершился не позже выбранного месяца**."
     )
 
     col2_year, col2_month = st.columns(2)
@@ -333,20 +460,32 @@ else:
         )
         selected_month_2 = [k for k, v in MONTH_OPTIONS.items() if v == selected_month_name_2][0]
 
+    selected_regions_2 = st.pills(
+        "Регион (без дат)",
+        options=REGION_ORDER,
+        default=REGION_ORDER,
+        selection_mode="multi",
+        key="no_dates_region",
+    )
+    if not selected_regions_2:
+        selected_regions_2 = REGION_ORDER
+
     selected_cols_2 = st.pills(
-        "Какие метрики показывать (таблица без дат)",
-        options=ALL_METRIC_COLS,
-        default=ALL_METRIC_COLS,
+        "Какие метрики показывать (без дат)",
+        options=METRIC_COLS,
+        default=METRIC_COLS,
         selection_mode="multi",
         key="no_dates_cols_pills",
     )
     if not selected_cols_2:
-        selected_cols_2 = ALL_METRIC_COLS
+        selected_cols_2 = METRIC_COLS
 
     if selected_year_2 != selected_year or selected_month_2 != selected_month:
         summary_2 = build_summary(year=selected_year_2, month=selected_month_2)
     else:
         summary_2 = summary
+
+    summary_2 = summary_2[summary_2["region"].isin(selected_regions_2)].reset_index(drop=True)
 
     display_no_dates = summary_2[["country", "country_name"]].copy()
     display_no_dates = display_no_dates.rename(columns={"country_name": "Страна"})
@@ -399,20 +538,16 @@ else:
 
     if export_format == "CSV":
         data = export_df.to_csv(index=False).encode("utf-8-sig")
-        mime = "text/csv"
-        ext = "csv"
+        mime, ext = "text/csv", "csv"
     elif export_format == "Excel (.xlsx)":
         data = to_excel_bytes(export_df)
-        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ext = "xlsx"
+        mime, ext = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
     elif export_format == "HTML":
         data = to_html_bytes(export_df)
-        mime = "text/html"
-        ext = "html"
+        mime, ext = "text/html", "html"
     else:
         data = to_pdf_bytes(export_df)
-        mime = "application/pdf"
-        ext = "pdf"
+        mime, ext = "application/pdf", "pdf"
 
     st.download_button(
         label=f"📥 Скачать {export_format}",
@@ -424,7 +559,12 @@ else:
 
     st.caption(
         "📌 **Источники:** IMF WEO, Eurostat, FRED, BEA, Treasury Fiscal Data, "
-        "национальные статистические службы. Дата указана под значением."
+        "национальные статистические службы, Bloomberg (ручные выгрузки). "
+        "Дата указана в ячейке после `·`."
+    )
+    st.caption(
+        "📅 **Сезонная корректировка:** большинство показателей — сезонно сглаженные (SA). "
+        "Если в пометке указано `NSA` — данные без сезонной корректировки."
     )
 
 st.divider()
@@ -513,21 +653,12 @@ with st.expander("💰 Ставки ЦБ (исторические)", expanded=F
         )
 
 with st.expander("📅 Экономический календарь", expanded=False):
-    cal = load_forexfactory()
-    if st.button("Обновить календарь", key="refresh_calendar"):
-        with st.spinner("Загружаю календарь..."):
-            try:
-                updated_cal = fetch_calendar()
-                if not updated_cal.empty:
-                    save_forexfactory(updated_cal)
-                    cal = updated_cal
-                else:
-                    st.warning("Источник не вернул события. Сохранённые данные оставлены.")
-            except Exception:
-                st.warning("Источник календаря недоступен. Попробуйте обновить позже.")
-
-    if cal.empty:
-        st.info("Календарь пока пуст. Нажмите «Обновить календарь», чтобы загрузить события.")
+    with st.spinner("Загружаю календарь..."):
+        try:
+            cal = fetch_calendar()
+        except Exception as e:
+            st.error(f"Ошибка: {e}")
+            cal = pd.DataFrame()
 
     if not cal.empty:
         min_imp = st.slider("Мин. важность", 1, 3, 2, key="cal_imp")

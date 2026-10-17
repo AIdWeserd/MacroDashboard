@@ -1,39 +1,20 @@
 # Macro Dashboard
 
-Дашборд макроэкономических метрик, экономического календаря и мировых новостей.
+Внутренний макроэкономический дашборд: сводная таблица по 17 странам, экономический календарь, ставки ЦБ, исторические
+графики и новости.
 
-Проект автоматизирует сбор данных из официальных источников (национальные статслужбы, центральные банки, минфины,
-международные организации). Все данные сохраняются в локальную SQLite и отображаются в Streamlit-интерфейсе.
+Проект собирает данные из официальных первоисточников (национальные статистические службы, центральные банки, минфины,
+международные организации) и показывает их в Streamlit-интерфейсе. Все данные хранятся в локальной SQLite.
 
-## Разработка и эксплуатация
+## Ключевая идея
 
-- [Карта кода и архитектура](docs/ARCHITECTURE.md).
-- [Первый ручной запуск на Ubuntu с доменом и HTTPS](docs/MANUAL_DEPLOYMENT.md).
-  [HTML-версия с копированием команд](docs/manual-deployment.html).
-- [Переход с ручного запуска на GitHub Actions](docs/GITHUB_ACTIONS_MIGRATION.md)
-  ([HTML-гайд](docs/github-actions.html)): SSH, GHCR, secrets и первый откат.
-- [Деплой на ВМ Яндекс Облака через GitHub Actions](docs/DEPLOYMENT.md):
-  Docker, GHCR, SSH, порты, секреты, обновления, backup и откат.
-- Контекст для агентов: корневой `AGENTS.md` и файлы в соответствующих каталогах.
+Не «ещё один агрегатор». Наоборот — прозрачный инструмент, где у каждой цифры видно:
 
-Локальный Docker-запуск из корня; сначала заполните `.env` по `.env.example`:
+- источник (ONS, Eurostat, FRED, BEA, IMF, BBG, ...),
+- период (Q2 2026, сен 2026, 2025 (IMF, год)),
+- методологию (Central Gov / General Gov, SA / NSA, факт или прогноз).
 
-```bash
-docker compose -f compose.yaml -f compose.local.yaml up -d --build web
-```
-
-Открыть `http://localhost:8501`. Данные находятся в локальном `data/` и не входят
-в образ. В Linux каталог и существующие файлы должны быть доступны UID/GID 10001;
-для нового каталога: `sudo install -d -o 10001 -g 10001 -m 750 data`.
-Периодическое сетевое обновление включается отдельно:
-
-```bash
-docker compose -f compose.yaml -f compose.local.yaml up -d updater
-```
-
-Остановка: `docker compose down`; файлы данных сохраняются.
-Без Docker доступны прежние команды ниже. Для версий контейнера используйте
-`python -m pip install -r requirements.lock` в Python 3.12 на Linux.
+Главный приоритет — достоверность и сопоставимость данных, а не количество метрик.
 
 ## Принципы выбора источников
 
@@ -41,223 +22,278 @@ docker compose -f compose.yaml -f compose.local.yaml up -d updater
    недели — берём альтернативу.
 2. Официальность + надёжность. Только структурированные источники с публичным API или официальными релизами. Не парсим
    журналистские сайты (Reuters, Investing.com). Агрегаторы (Trading Economics, CEIC) — не используем.
-3. Бесплатность. Платные API не применяются.
-4. Фактичность. Где возможно — подтверждённые данные, не прогнозы. Прогнозы IMF — только как fallback.
+3. Бесплатность. Платные API не применяются. Bloomberg — только ручные выгрузки там, где официального источника нет.
+4. Фактичность. Где возможно — подтверждённые данные, не прогнозы. IMF WEO — только как fallback.
 5. Проверяемость. У каждого источника — открытая ссылка и публичные релизы.
 
-## Что внутри
+## Приоритеты источников
 
-Одна главная вкладка со сводной таблицей + пять expander'ов с деталями.
+Для каждой метрики/страны/периода:
+
+1. Официальный национальный источник (Eurostat, ONS, BEA, IBGE, NBS, ...)
+2. Bloomberg — если официального нет
+3. IMF WEO — fallback, годовое значение
+4. Прочерк — если ничего нет
+
+Правило для декабря: за декабрь (год закрыт) для долга / бюджета / трейда берём годовое значение (IMF или официальное).
+За остальные месяцы — квартальное.
+
+## Что внутри
 
 ### Основная таблица
 
 17 стран × 11 колонок:
 
-| Колонка      | Что показывает | Источник                                                                                          |
-|--------------|----------------|---------------------------------------------------------------------------------------------------|
-| Инфляция     | YoY, %         | FRED / Eurostat / ONS / e-Stat / ECOS / SingStat / Tonghuashun / SIDRA / MoSPI / TCMB / FSO / ABS |
-| Инфляция MoM | MoM, %         | то же                                                                                             |
-| Core         | Core YoY, %    | FRED / Eurostat / ONS / StatCan / e-Stat / SingStat / FSO                                         |
-| Безработица  | %, SA          | Eurostat / FRED / data.gov.sg / SIDRA / chinadata.live / MoSPI / FSO                              |
-| Долг/ВВП     | %              | Treasury / Eurostat / ONS / MOF / BCB / NIFD / SingStat / StatCan / IMF DSBB / IMF                |
-| Бюджет/ВВП   | %              | MTS / Eurostat / ONS / Минфин КНР / SingStat / StatCan / IMF                                      |
-| Трейд/ВВП    | %              | BEA / Eurostat / ONS / SAFE / BCB / SingStat / StatCan / ABS / SNB / IMF                          |
-| Рост ВВП     | %, YoY         | Eurostat / FRED / Tonghuashun / SECO / SingStat / SIDRA / MoSPI                                   |
-| Ставка       | %, ключевая    | FRED / BoE / BoJ / BoC / SNB / rba-mcp / BCB / chinamoney / OECD                                  |
+| Колонка      | Что показывает | Источник                                                                                            |
+|--------------|----------------|-----------------------------------------------------------------------------------------------------|
+| Ставка ЦБ    | %, ключевая    | FRED / BoE / BoJ / BoC / SNB / RBA / BCB / chinamoney / OECD                                        |
+| Инфляция YoY | %              | FRED / Eurostat / ONS / e-Stat / ECOS / SingStat / NBS / SIDRA / MoSPI / TCMB / FSO / ABS / StatCan |
+| Инфляция MoM | %              | то же                                                                                               |
+| Core CPI YoY | %              | FRED / Eurostat / ONS / e-Stat / SingStat / FSO / StatCan / NBS                                     |
+| Рост ВВП     | % YoY          | Eurostat / FRED / Tonghuashun / SECO / SingStat / SIDRA / MoSPI                                     |
+| Безработица  | %, SA          | Eurostat / FRED / data.gov.sg / SIDRA / chinadata.live / MoSPI / FSO                                |
+| Долг/ВВП     | %              | Treasury / Eurostat / ONS / MOF / BCB / NIFD / SingStat / StatCan / IMF DSBB / IMF / BBG            |
+| Бюджет/ВВП   | %              | MTS / BEA / Eurostat / ONS / Минфин КНР / SingStat / StatCan / IMF / BBG                            |
+| Трейд/ВВП    | %              | BEA / Eurostat / ONS / SAFE / BCB / SingStat / StatCan / ABS / SNB / IMF / BBG                      |
+
+### Дашборд Streamlit
+
+- Две таблицы: с датами и без.
+- Фильтры: год, месяц, регион (Америка / Европа / Азия и Океания), метрики.
+- Подсветка:
+    - красным — данные из Bloomberg,
+    - жёлтым — изменения за неделю.
+- Экспорт: CSV, Excel, HTML, PDF.
+- Сноска про сезонность: большинство показателей — SA; явно помеченные — NSA.
 
 ### Expander'ы
 
 1. Месячные метрики (детально) — свежие HICP и безработица по странам ЕС.
-2. Ставки ЦБ (исторические) — таблица «Страна × Месяц» по 12 странам.
+2. Ставки ЦБ (исторические) — таблица «Страна × Месяц».
 3. Экономический календарь — события на неделю (ForexFactory).
-4. FRED (исторические ряды) — исторические CPI, PPI, ставки, GDP.
-5. Новости — Reuters, BBC, Investing.com.
+4. FRED (исторические ряды) — CPI, PPI, ставки, GDP.
+5. Новости — RSS-ленты.
+
+## Архитектура
+
+src/fetch_*.py → scheduler.py → src/storage.py → data/macro.db → src/build_summary.py → app.py (Streamlit)
+
+| Файл                   | Ответственность                                                 |
+|------------------------|-----------------------------------------------------------------|
+| app.py                 | Streamlit-интерфейс, фильтры, экспорты, подсветка               |
+| scheduler.py           | Ручной CLI: группы источников, вызов fetch/save                 |
+| config.py              | Пути, .env, ключи API, списки стран, RSS, календарь             |
+| src/storage.py         | SQLite: сохранение / чтение / очистка                           |
+| src/build_summary.py   | Сводка по 17 странам, приоритеты источников                     |
+| src/snapshot.py        | Недельные снимки, сравнение для подсветки                       |
+| src/charts.py          | Графики Plotly                                                  |
+| src/cleanup.py         | Очистка файлов Bloomberg (180 дней) и NIFD (90 дней)            |
+| src/fetch_bloomberg.py | Парсер xlsx-выгрузок с автоопределением квартала по last_update |
+| src/fetch_*.py         | Получение и нормализация данных                                 |
 
 ## Текущий статус по странам
 
-Легенда: ✅ — фактические квартальные, ⏳ — IMF (годовые), ❌ — нет данных.
+Легенда: ✅ — фактические квартальные, 🟡 — годовое (IMF / Eurostat annual), 🔴 — Bloomberg (нет официального), ❌ — нет
+данных.
 
-| Страна | Инфляция | Безработица | Долг/ВВП   | Бюджет/ВВП | Трейд/ВВП  | Рост ВВП | Ставка   |
-|--------|----------|-------------|------------|------------|------------|----------|----------|
-| US     | ✅        | ✅           | ✅ Treasury | ✅ MTS      | ✅ BEA      | ✅        | ✅ 4.00%  |
-| CN     | ✅        | ✅           | ✅ NIFD     | ✅ Минфин   | ✅ SAFE     | ✅        | ✅ 3.00%  |
-| EU     | ✅        | ✅           | ✅ Eurostat | ✅ Eurostat | ✅ Eurostat | ✅        | ✅ 2.50%  |
-| JP     | ✅        | ✅           | ✅ MOF      | ⏳ IMF      | ⏳ IMF      | ✅        | ✅ 1.50%  |
-| DE     | ✅        | ✅           | ✅ Eurostat | ✅ Eurostat | ✅ Eurostat | ✅        | ✅ 2.50%  |
-| GB     | ✅        | ✅           | ✅ ONS      | ✅ ONS      | ✅ ONS      | ✅        | ✅ 3.75%  |
-| FR     | ✅        | ✅           | ✅ Eurostat | ✅ Eurostat | ✅ Eurostat | ✅        | ✅ 2.50%  |
-| IT     | ✅        | ✅           | ✅ Eurostat | ✅ Eurostat | ✅ Eurostat | ✅        | ✅ 2.50%  |
-| ES     | ✅        | ✅           | ✅ Eurostat | ✅ Eurostat | ✅ Eurostat | ✅        | ✅ 2.50%  |
-| CA     | ✅        | ✅           | ✅ StatCan  | ✅ StatCan  | ✅ StatCan  | ✅        | ✅ 2.25%  |
-| AU     | ✅        | ✅           | ⏳ IMF      | ⏳ IMF      | ✅ ABS      | ✅        | ✅ 4.36%  |
-| KR     | ✅        | ✅           | ✅ DSBB     | ⏳ IMF      | ⏳ IMF      | ✅        | ✅ 2.97%  |
-| SG     | ✅        | ✅           | ✅ SingStat | ✅ SingStat | ✅ SingStat | ✅        | ❌        |
-| BR     | ✅        | ✅           | ✅ BCB      | ❌          | ✅ BCB      | ✅        | ✅ 13.75% |
-| IN     | ✅        | ✅           | ⏳ IMF      | ⏳ IMF      | ⏳ IMF      | ✅        | ✅ 5.32%  |
-| TR     | ✅        | ✅           | ⏳ IMF      | ⏳ IMF      | ⏳ IMF      | ✅        | ✅ 38.75% |
-| CH     | ✅        | ✅           | ⏳ IMF      | ⏳ IMF      | ✅ SNB      | ✅        | ✅ 0.00%  |
+| Страна | Инфляция | Core  | Безработица | Рост ВВП | Долг/ВВП            | Бюджет/ВВП      | Трейд/ВВП       |
+|--------|----------|-------|-------------|----------|---------------------|-----------------|-----------------|
+| US     | ✅        | ✅     | ✅           | ✅        | ✅ Treasury (Fed)    | ✅ BEA           | ✅ BEA           |
+| CN     | ✅        | ✅ NBS | ✅           | ✅        | ✅ NIFD + 🟡 IMF     | ✅ MOF + 🟡 IMF  | ✅ SAFE          |
+| EU     | ✅        | ✅     | ✅           | ✅        | ✅ Eurostat          | ✅ Eurostat      | ✅ Eurostat      |
+| DE     | ✅        | ✅     | ✅           | ✅        | ✅ Eurostat          | ✅ Eurostat      | ✅ Eurostat      |
+| JP     | ✅        | ✅     | ✅           | ✅        | ✅ MOF + 🟡 IMF      | 🟡 IMF          | 🔴 BBG + 🟡 IMF |
+| IN     | ✅        | ❌     | ✅           | ✅        | 🟡 IMF              | 🔴 BBG + 🟡 IMF | 🔴 BBG + 🟡 IMF |
+| GB     | ✅        | ✅     | ✅           | ✅        | ✅ ONS               | ✅ ONS           | ✅ ONS           |
+| FR     | ✅        | ✅     | ✅           | ✅        | ✅ Eurostat          | ✅ Eurostat      | ✅ Eurostat      |
+| IT     | ✅        | ✅     | ✅           | ✅        | ✅ Eurostat          | ✅ Eurostat      | ✅ Eurostat      |
+| BR     | ✅        | ❌     | ✅           | ✅        | ✅ BCB               | 🔴 BBG + 🟡 IMF | ✅ BCB           |
+| CA     | ✅        | ✅     | ✅           | ✅        | ✅ StatCan (NSA)     | ✅ StatCan (NSA) | ✅ StatCan       |
+| KR     | ✅        | ❌     | ✅           | ✅        | ✅ IMF DSBB + 🟡 IMF | 🟡 IMF          | 🔴 BBG + 🟡 IMF |
+| AU     | ✅        | ❌     | ✅           | ✅        | 🟡 IMF              | 🟡 IMF          | ✅ ABS           |
+| ES     | ✅        | ✅     | ✅           | ✅        | ✅ Eurostat          | ✅ Eurostat      | ✅ Eurostat      |
+| TR     | ✅        | ❌     | ✅           | ✅        | 🟡 IMF              | 🔴 BBG + 🟡 IMF | 🔴 BBG + 🟡 IMF |
+| CH     | ✅        | ✅     | ✅           | ✅        | 🟡 IMF              | 🟡 IMF          | ✅ SNB           |
+| SG     | ✅        | ✅     | ✅           | ✅        | ✅ SingStat          | 🟡 IMF          | ✅ SingStat      |
 
 Итого:
 
-- Инфляция — 17 из 17 фактических.
-- Безработица — 17 из 17 фактических.
-- Рост ВВП — 17 из 17 фактических.
-- Ставка — 12 из 13 (кроме Сингапура).
-- Долг/ВВП — 11 из 17 квартальных.
-- Бюджет/ВВП — 9 из 17 квартальных, 1 прочерк (BR), 7 IMF годовых.
-- Трейд/ВВП — 10 из 17 квартальных, 7 IMF годовых.
+- Инфляция — 17/17 фактических.
+- Безработица — 17/17.
+- Рост ВВП — 17/17.
+- Ставка — 16/17 (кроме Сингапура, у MAS нет policy rate).
+- Долг/ВВП — 12/17 квартальных, 5 IMF годовых.
+- Бюджет/ВВП — 10/17 квартальных, 3 через Bloomberg, 4 IMF годовых.
+- Трейд/ВВП — 12/17 квартальных, 4 через Bloomberg, 3 IMF годовых.
+- Core CPI — 11/17 официальных, 6 прочерков.
 
-## Отложенные задачи
+## Bloomberg: ручные выгрузки
 
-### 1. Бюджет и трейд для Японии
+Используется только там, где нет официального источника.
 
-Официального квартального Overall Fiscal Balance не существует. MOF публикует только кассовое исполнение. Трейд Японии
-можно сделать через MOF BoP (PDF) — сложно, отложено.
+### Формат xlsx
 
-### 2. Долг, бюджет, трейд для Индии
+| country | metric     | ticker       | field   | last_update            | value       | date      | frequency |
+|---------|------------|--------------|---------|------------------------|-------------|-----------|-----------|
+| IN      | budget_gdp | EHBBIN Index | PX_LAST | =BDP(C2,"LAST_UPDATE") | =BDP(C2,D2) | =BTODAY() | Q         |
+| IN      | trade_gdp  | EHCAIN Index | PX_LAST | =BDP(C3,"LAST_UPDATE") | =BDP(C3,D3) | =BTODAY() | Q         |
+| TR      | budget_gdp | EHBBTR Index | PX_LAST | =BDP(C4,"LAST_UPDATE") | =BDP(C4,D4) | =BTODAY() | Q         |
+| TR      | trade_gdp  | EHCATR Index | PX_LAST | =BDP(C5,"LAST_UPDATE") | =BDP(C5,D5) | =BTODAY() | Q         |
+| BR      | budget_gdp | EHBBBR Index | PX_LAST | =BDP(C6,"LAST_UPDATE") | =BDP(C6,D6) | =BTODAY() | Q         |
+| JP      | trade_gdp  | EHCAJP Index | PX_LAST | =BDP(C7,"LAST_UPDATE") | =BDP(C7,D7) | =BTODAY() | Q         |
+| KR      | trade_gdp  | EHCAKR Index | PX_LAST | =BDP(C8,"LAST_UPDATE") | =BDP(C8,D8) | =BTODAY() | Q         |
 
-CGA и RBI публикуют данные в HTML/Excel, парсинг хрупкий (структура меняется). Оставляем IMF.
+### Как работает парсер
 
-### 3. Долг, бюджет, трейд для Турции
+1. Файл bbg_export.xlsx кладётся на удалённом ПК.
+2. Скрипт scripts/import_bbg.ps1 переносит его в data/bloomberg/bbg_YYYY-MM-DD.xlsx.
+3. fetch_bloomberg.py читает файл, конвертирует last_update в квартал (30.06.2026 → Q2 2026), сохраняет в таблицу
+   bloomberg.
+4. В build_summary.py — приоритет выше IMF, ниже официальных.
+5. В дашборде — красная подсветка для всех BBG-ячеек.
 
-Минфин Турции — React SPA, контент через JavaScript. requests не работает, curl_cffi тоже. Оставляем IMF.
+### Лимиты Bloomberg Excel Add-in
 
-### 4. Бюджет для Бразилии
+- ≤ 2500–3000 уникальных тикеров в месяц.
+- ≤ 200 000 датапоинтов в день.
+- Не использовать TODAY() — только BTODAY().
+- Осторожно с F9 / Shift+F9 / Ctrl+Shift+Enter.
 
-BCB не публикует квартальный Overall Fiscal Balance. Только 12-месячный накопленный (SGS 5785) или месячный. Оставляем
-прочерк.
+У нас ~7 тикеров + одна выгрузка в неделю — лимиты не превышаются.
 
-### 5. Долг и бюджет для Австралии
+## Структура проекта
 
-Dataflow GFS в ABS Data API не существует. GFS публикуется отдельно. Оставляем IMF.
-
-### 6. Ставка для Сингапура
-
-MAS не устанавливает классическую ставку — использует курсовую политику (S$NEER). SORA — это бенчмарк, а не ключевая
-ставка. Бесплатного API нет. Оставляем прочерк.
-
-### 7. Core CPI для CN, KR, BR, IN, AU, TR
-
-- CN — NBS не публикует Core CPI.
-- KR — ECOS sample-ключ не даёт Core.
-- BR — только MoM в BCB.
-- IN — MoSPI не публикует.
-- AU — Trimmed mean недоступен.
-- TR — только в PDF.
-
-### 8. Инфраструктура
-
-- Фильтры в основной таблице (пользователь выбирает метрики).
-- Кнопка «Печать».
-- Экспорт в Excel.
-- Мониторинг свежести данных.
-
-## Установка
-
-1. Клонировать проект:
-   cd C:\MyProjects\CB\Macro_dashboard
-
-2. Создать виртуальное окружение:
-   python -m venv .venv
-
-3. Активировать:
-   .venv\Scripts\activate
-
-4. Установить зависимости:
-   pip install -r requirements.txt
-
-5. Получить API-ключи:
-    - FRED: https://fred.stlouisfed.org/docs/api/api_key.html
-    - e-Stat: https://www.e-stat.go.jp/api/
-    - BEA: https://apps.bea.gov/api/signup/
-
-6. Создать .env:
-   FRED_API_KEY=...
-   ESTAT_APP_ID=...
-   BEA_API_KEY=...
+macro_dashboard/
+├── data/
+│ ├── macro.db
+│ ├── bloomberg/
+│ └── nifd_reports/
+├── scripts/
+│ └── import_bbg.ps1
+├── src/
+│ ├── storage.py
+│ ├── snapshot.py
+│ ├── charts.py
+│ ├── build_summary.py
+│ ├── cleanup.py
+│ ├── fetch_bloomberg.py
+│ ├── fetch_us.py
+│ ├── fetch_us_treasury.py
+│ ├── fetch_us_bea.py
+│ ├── fetch_us_fred_annual.py
+│ ├── fetch_eurostat.py
+│ ├── fetch_eurostat_quarterly.py
+│ ├── fetch_eurostat_annual.py
+│ ├── fetch_eurostat_unemployment.py
+│ ├── fetch_china_cpi.py
+│ ├── fetch_china_core_cpi.py
+│ ├── fetch_china_debt_fred.py
+│ ├── fetch_china_fiscal.py
+│ ├── fetch_china_gdp.py
+│ ├── fetch_china_trade.py
+│ ├── fetch_china_unemployment.py
+│ ├── fetch_nifd_report.py
+│ ├── fetch_japan_cpi.py
+│ ├── fetch_japan_quarterly.py
+│ ├── fetch_korea_cpi.py
+│ ├── fetch_korea_quarterly.py
+│ ├── fetch_india_cpi.py
+│ ├── fetch_india_gdp.py
+│ ├── fetch_india_unemployment.py
+│ ├── fetch_uk_ons.py
+│ ├── fetch_uk_quarterly.py
+│ ├── fetch_brazil_cpi.py
+│ ├── fetch_brazil_gdp.py
+│ ├── fetch_brazil_ibge.py
+│ ├── fetch_brazil_quarterly.py
+│ ├── fetch_canada_cpi.py
+│ ├── fetch_canada_quarterly.py
+│ ├── fetch_australia_cpi.py
+│ ├── fetch_australia_quarterly.py
+│ ├── fetch_turkey_cpi.py
+│ ├── fetch_switzerland_cpi.py
+│ ├── fetch_switzerland_gdp.py
+│ ├── fetch_switzerland_quarterly.py
+│ ├── fetch_switzerland_unemployment.py
+│ ├── fetch_singapore_cpi.py
+│ ├── fetch_singapore_gdp.py
+│ ├── fetch_singapore_mom.py
+│ ├── fetch_singapore_quarterly.py
+│ ├── fetch_fred.py
+│ ├── fetch_fred_cpi.py
+│ ├── fetch_fred_gdp.py
+│ ├── fetch_fred_unemployment.py
+│ ├── fetch_imf.py
+│ ├── fetch_policy_rates.py
+│ ├── fetch_forexfactory.py
+│ └── fetch_rss.py
+├── app.py
+├── config.py
+├── scheduler.py
+├── requirements.txt
+├── .env
+├── .gitignore
+├── README.md
+├── INSTRUCTIONS.md
+├── SOURCES.md
+├── ADVANTAGES.md
+└── AGENTS_HACKATHON.md
 
 ## Запуск
 
-Обновить все данные:
-python scheduler.py
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 
-Обновить только Китай:
-python scheduler.py cn
-
-Только ставки:
-python scheduler.py rates
-
-Список групп:
-python scheduler.py --list
-
-Справка:
-python scheduler.py --help
-
-Открыть дашборд:
+Скопировать .env.example в .env и заполнить ключи.
+python scheduler.py # обновить всё
+python scheduler.py us # только США
+python scheduler.py cn in tr # Китай, Индия, Турция
+python scheduler.py --list # список групп
 streamlit run app.py
 
-## Группы в scheduler
+### Группы в scheduler
 
-| Группа   | Что обновляет                                      |
-|----------|----------------------------------------------------|
-| rates    | Ставки ЦБ (12 стран)                               |
-| us       | США: Treasury + BEA                                |
-| sg       | Сингапур: CPI, безработица, ВВП, долг/бюджет/трейд |
-| br       | Бразилия: CPI, безработица, ВВП, долг/трейд        |
-| gb       | Великобритания: ONS, CPI                           |
-| jp       | Япония: MOF, CPI                                   |
-| kr       | Южная Корея: IMF DSBB, CPI                         |
-| au       | Австралия: ABS, CPI                                |
-| ca       | Канада: StatCan, CPI                               |
-| ch       | Швейцария: SNB + SECO, CPI, безработица, ВВП       |
-| cn       | Китай: безработица, NIFD, Минфин, ВВП, CPI         |
-| in       | Индия: безработица, CPI, ВВП                       |
-| tr       | Турция: CPI                                        |
-| fred     | FRED: макро, GDP, безработица, CPI                 |
-| imf      | IMF WEO                                            |
-| eurostat | Eurostat: HICP, безработица, квартальные           |
-| extra    | ForexFactory, RSS                                  |
+| Группа   | Что обновляет                                     |
+|----------|---------------------------------------------------|
+| rates    | Ставки ЦБ                                         |
+| us       | США: Treasury + BEA + годовой General Gov         |
+| cn       | Китай: NIFD, MOF, SAFE, NBS Core CPI, FRED        |
+| gb       | Великобритания: ONS, CPI                          |
+| jp       | Япония: MOF, e-Stat, CPI                          |
+| kr       | Южная Корея: IMF DSBB, ECOS                       |
+| au       | Австралия: ABS, CPI                               |
+| ca       | Канада: StatCan, CPI                              |
+| ch       | Швейцария: SNB + SECO, CPI                        |
+| br       | Бразилия: BCB SGS, IBGE SIDRA, CPI                |
+| in       | Индия: MoSPI MCP                                  |
+| tr       | Турция: TCMB                                      |
+| fred     | FRED: макро, GDP, безработица, CPI                |
+| imf      | IMF WEO                                           |
+| eurostat | Eurostat: HICP, безработица, квартальные, годовые |
+| bbg      | Bloomberg: ручные выгрузки                        |
+| extra    | ForexFactory, RSS                                 |
 
-## VPN-требования
+## Документация
 
-Проверка, что VPN работает для Python:
-python -c "from curl_cffi import requests; print(requests.get('https://ipinfo.io/country').text)"
+- README.md (этот файл) — контекст, архитектура, статус, запуск.
+- INSTRUCTIONS.md — все команды для работы с проектом.
+- SOURCES.md — все источники по метрикам и странам.
+- ADVANTAGES.md — чем проект отличается от агрегаторов.
+- AGENTS_HACKATHON.md — контекст для хакатон-команды.
 
-| Источник                                      | Требуется VPN | Какой                                          |
-|-----------------------------------------------|---------------|------------------------------------------------|
-| Tonghuashun (Китай)                           | Да            | Азиатский (Гонконг, Сингапур, Тайвань, Япония) |
-| Минфин КНР, SAFE                              | Да            | Европейский (Бельгия, Швейцария)               |
-| NIFD (Китай)                                  | Нет           | Работает без VPN                               |
-| MoSPI (Индия)                                 | Да            | Любой не-российский                            |
-| ABS (Австралия)                               | Нет           | Работает                                       |
-| dataseries.org (Швейцария)                    | Да            | Любой не-российский                            |
-| FRED, Eurostat, ONS, BEA, Treasury            | Нет           | Работают без VPN                               |
-| e-Stat, BoJ, BoE, BoC, SNB, StatCan, SingStat | Нет           | Работают                                       |
-| chinamoney (Китай)                            | Нет           | Работает                                       |
-| BCB (Бразилия)                                | Нет           | Работает                                       |
-| rba-mcp (Австралия)                           | Нет           | Работает                                       |
+## Известные ограничения
 
-## Риски парсинга и устойчивость
-
-Retry-логика:
-
-- FRED — 3 попытки.
-- SIDRA (Бразилия) — 3 попытки.
-- NIFD — 3 попытки.
-- SingStat — 3 попытки при 502.
-- Минфин КНР — 5 попыток, timeout=90.
-- SAFE — 3 попытки.
-- MoSPI — 3 попытки.
-- BCB SGS — 3 попытки.
-
-Кеширование:
-
-- PDF NIFD кешируются в data/nifd_reports/.
-
-Накопление:
-
-- save_china_fiscal — merge по дате, NaN дозаполняются.
-- _save_df пропускает пустые DataFrame.
+1. Япония: бюджет и трейд — IMF. У MOF нет квартального Overall Balance.
+2. Индия: бюджет и трейд — Bloomberg. CGA/RBI — HTML, парсинг хрупкий.
+3. Турция: бюджет и трейд — Bloomberg. Минфин — React SPA.
+4. Бразилия: бюджет — Bloomberg. BCB не публикует квартальный Overall Balance.
+5. Австралия: долг и бюджет — IMF. Dataflow GFS в ABS Data API не существует.
+6. Сингапур: ставка — прочерк. У MAS нет классической policy rate.
+7. Core CPI: недоступен для CN (NBS даёт только YoY через пресс-релизы), KR (ECOS sample-ключ), BR, IN, AU, TR.
+8. Индия: ставка — с задержкой 2 месяца (FRED / OECD).
+9. SAFE (Китай): задержка ~3 месяца.
+10. ForexFactory: 403 Forbidden с 2026. Календарь не работает.
 
 ## Архитектурные решения
 
@@ -266,124 +302,98 @@ Retry-логика:
 Сводная таблица не хранится в БД — собирается в build_summary.py при каждом рендере app.py. Логика приоритетов
 источников сложная, её проще вычислить на лету.
 
-### Приоритеты источников
-
-1. Национальный официальный источник (квартальный) — если есть.
-2. FRED — если национальный недоступен или отстаёт.
-3. IMF WEO — последний fallback, годовые прогнозы.
-
 ### Почему у некоторых стран годовые метки
 
 Если у страны нет официального квартального источника — ставим годовое значение из IMF с пометкой «(IMF, год)».
 
-### Почему у Бразилии бюджет = прочерк
+### Почему у Японии долг = 48–205% (разные периоды)
 
-BCB публикует только 12-месячный накопленный NFSP (% PIB) или месячные абсолютные значения. Квартального официального
-Overall Fiscal Balance не существует.
+- Квартально — MOF Central Government Debt (~48–50%).
+- Декабрь — IMF General Government Gross Debt (~205%).
 
-### Почему у Японии долг = 48,85% (Central Government)
+Разница — в 4 раза, потому что MOF публикует только центральное правительство, а General Gov включает местные власти и
+соцфонды. Пометки честно указывают разницу.
 
-MOF публикует Central Government Debt (только центральное правительство). CEIC и IMF дают General Government Gross
-Debt (~204%). Разница — в 4 раза. Показываем официальный квартальный MOF (48,85%), помечаем «(Central Gov)».
+### Почему у Сингапура долг = 153%
 
-### Почему ставка — отдельная вкладка
+Central Gov Gross Debt Сингапура ~150% GDP, потому что правительство выпускает много SGS (гособлигаций) для создания
+рынка. При этом у Сингапура большие активы (GIC, Temasek, MAS) — net debt отрицательный. Показываем gross debt, помечаем
+Central Gov.
 
-Ключевая ставка — не ежемесячная метрика, а событийная. Меняется на заседаниях ЦБ. В основной таблице показываем текущее
-значение, в отдельном expander'е — полную историю по месяцам.
+### Почему у Сингапура budget_gdp = IMF, а не SingStat
 
-### Почему Индия — с задержкой
+SingStat даёт deficit_sgd_mn в месячном NSA-виде, значения скачут от −5346 до +13678. Знак неоднозначен. Используем IMF
+годовое — стабильно +3.7% за 2025.
 
-RBI блокирует ботов (403 Cloudflare). Официального API нет. Используем FRED INDIR3TIB01STM (OECD на основе данных RBI) —
-3-month interbank rate с задержкой ~2 месяца. Альтернатива — хардкод официальных изменений RBI, но это против принципа
-автоматизации.
+### Почему у Великобритании долг = 100%, а не 148%
 
-### Почему Сингапур — с прочерком
+Bloomberg / World Bank показывают 148% — это неконсолидированный долг с госкомпаниями. ONS a3pw даёт ~100% —
+Maastricht-методология, консолидированная, сопоставимая с Германией (63%) и Францией (115%). Используем ONS —
+сопоставимо с ЕС.
 
-MAS не устанавливает классическую ставку. Вместо этого — курсовая политика (S$NEER). SORA — это бенчмарк (overnight
-rate), а не ключевая ставка. Бесплатного API нет.
+## Задачи на неделю
 
-## Структура проекта
+### Приоритет — сверка Bloomberg vs наши источники
 
-macro_dashboard/
-data/
-macro.db
-nifd_reports/
-src/
-storage.py
-snapshot.py
-charts.py
-build_summary.py
-fetch_us.py
-fetch_us_treasury.py
-fetch_us_bea.py
-fetch_singapore_cpi.py
-fetch_singapore_gdp.py
-fetch_singapore_mom.py
-fetch_singapore_quarterly.py
-fetch_brazil_cpi.py
-fetch_brazil_gdp.py
-fetch_brazil_ibge.py
-fetch_brazil_quarterly.py
-fetch_uk_ons.py
-fetch_uk_quarterly.py
-fetch_japan_cpi.py
-fetch_japan_quarterly.py
-fetch_china_cpi.py
-fetch_china_fiscal.py
-fetch_china_gdp.py
-fetch_china_trade.py
-fetch_china_unemployment.py
-fetch_nifd_report.py
-fetch_india_cpi.py
-fetch_india_gdp.py
-fetch_india_unemployment.py
-fetch_canada_cpi.py
-fetch_canada_quarterly.py
-fetch_australia_cpi.py
-fetch_australia_quarterly.py
-fetch_turkey_cpi.py
-fetch_switzerland_cpi.py
-fetch_switzerland_unemployment.py
-fetch_switzerland_gdp.py
-fetch_switzerland_quarterly.py
-fetch_korea_cpi.py
-fetch_korea_quarterly.py
-fetch_fred.py
-fetch_fred_cpi.py
-fetch_fred_gdp.py
-fetch_fred_unemployment.py
-fetch_eurostat.py
-fetch_eurostat_quarterly.py
-fetch_eurostat_unemployment.py
-fetch_imf.py
-fetch_policy_rates.py
-fetch_forexfactory.py
-fetch_rss.py
-app.py
-config.py
-scheduler.py
-requirements.txt
-.env
-.gitignore
-README.md
-SOURCES.md
+Задача 1. Найти расхождения. Для США, Германии, Франции, Китая сравнить значения из Bloomberg с нашими источниками.
+Выписать расхождения и причины.
 
-## Известные ограничения
+Задача 2. Экспорт из Bloomberg в Excel по BDP. Ваня — прислать скриншот или пример файла. Убедиться, что не нарушаем
+лимиты.
 
-1. Япония: бюджет и трейд — IMF.
-2. Бразилия: бюджет — прочерк.
-3. Индия, Турция: долг, бюджет, трейд — IMF.
-4. Австралия: долг и бюджет — IMF.
-5. Core CPI: недоступен для CN, KR, BR, IN, AU, TR.
-6. Сингапур: ставка — прочерк.
-7. Индия: ставка — с задержкой 2 месяца (FRED OECD).
-8. SAFE (Китай): задержка ~3 месяца.
-9. Минфин КНР, SAFE: периодически 502.
-10. Tonghuashun: требует азиатского VPN.
-11. NIFD: исследовательский институт, не госорган.
-12. MoSPI, dataseries.org: блокируют РФ.
-13. FRED: периодически 502.
-14. ECOS: sample-ключ (лимит 10 строк).
+Задача 3. Core CPI Китая. Ваня — прислать ссылку или кор, где взять Core Inflation по Китаю.
+
+Задача 4. Фильтры в шапку таблицы. Уже есть (год, месяц, регион, метрики). Проверить, доработать при необходимости.
+
+Задача 5. Жёлтая подсветка обновившихся ячеек. Уже работает через snapshot.py. Проверить.
+
+Задача 6. Автоматизация отчёта. Ваня — написать, что хочет автоматизировать:
+
+- графики в конце отчёта,
+- автозаполнение текстом,
+- применение формата ко всему отчёту.
+
+### Дополнительно из записки
+
+- Лёша — добавить в чат «Недельный».
+- Ваня — прислать скриншот таблицы, дать обратную связь.
+- Ссылки на первоисточники — для каждого показателя добавить ссылку на официальный релиз.
+- По Японии — посмотреть, есть ли Core-Core и Tokyo CPI (предиктор национальной инфляции). Не приоритет.
+- По Китаю — YTD и YoY, объединение jan-feb, таможенные данные.
+
+## Контекст для LLM-ассистента
+
+Если ты — ChatGPT Plus или другой LLM-ассистент, помогающий команде, прочитай этот раздел.
+
+### Что понимать
+
+1. Проект — макроэкономический дашборд на Python + Streamlit + SQLite.
+2. 17 стран собраны из официальных источников.
+3. Приоритеты: официальный → Bloomberg → IMF.
+4. Декабрь = годовое значение (IMF или официальное), остальные месяцы — квартальные.
+5. Bloomberg используется только там, где нет официального источника. Каждое значение BBG подсвечено красным.
+6. Числа в ячейках имеют формат: значение · период (источник, методология).
+
+### Правила работы с командой
+
+- Всегда проси показать релевантный код целиком, прежде чем писать правки. Без контекста получится галлюцинация.
+- Формулировка задачи — узкая. «Напиши функцию X для API Y по такому образцу ответа» — хорошо. «Улучши весь проект» —
+  плохо.
+- Не выдумывай API. Если не знаешь эндпоинт — попроси команду проверить руками (curl / браузер) и принести ответ.
+- Никогда не запрашивай и не принимай API-ключи в промптах. Они живут в .env.
+- Предупреждай о рисках парсинга: смена вёрстки, блокировки, лимиты.
+- Проверяй вместе с командой: запрос → ответ → парсер → DataFrame → ячейка в дашборде.
+- Если задача большая — разбей на шаги, предложи порядок.
+- Если что-то неясно — спроси, не строй догадок.
+
+### Что не делать
+
+- Автотесты, Docker, CI — не приоритет.
+- Платные API — только бесплатные (MOEX, ЦБ, ЕМИСС).
+- LLM для парсинга — только регулярки и BeautifulSoup.
+- Агрегаторы без первоисточника — данные теряют достоверность.
+- Заменять отсутствующие данные нулями — ставим прочерк.
+- Смешивать Central Gov / General Gov, SA / NSA, YoY / MoM — только с пометкой.
 
 ## Передача проекта
 
@@ -391,9 +401,9 @@ SOURCES.md
 
 Что получатель делает:
 
-1. Создаёт окружение: python -m venv .venv
-2. Ставит зависимости: pip install -r requirements.txt
-3. Получает ключи FRED, e-Stat, BEA.
+1. Создаёт окружение: python -m venv .venv.
+2. Ставит зависимости: pip install -r requirements.txt.
+3. Получает ключи: FRED, e-Stat, BEA.
 4. Создаёт .env.
 5. Убеждается, что VPN включён (для Китая).
 6. Запускает python scheduler.py.

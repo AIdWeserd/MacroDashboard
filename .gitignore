@@ -1,35 +1,9 @@
-# Credentials and local configuration
-.env
-.env.*
-!.env.example
-
-# IDE settings
-.idea/
-.vscode/
-
-# Python environments and bytecode
 .venv/
-venv/
-env/
 __pycache__/
-*.py[cod]
-
-# Tool caches and build output
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-build/
-dist/
-*.egg-info/
-
-# Runtime data, backups and deployment credentials
+*.pyc
+.idea/
 data/
-compose.env
-*.pem
-*.key
-*.db
-*.db-wal
-*.db-shm
+.env
+*.log
+test_*.py
+weo_*.csv

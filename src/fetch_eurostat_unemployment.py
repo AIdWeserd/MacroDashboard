@@ -6,11 +6,11 @@ EUROSTAT_BASE = "https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/data"
 
 # Датасет: безработица, месячная, сезонно сглаженная, %
 DATASET = "UNE_RT_M"
-FREQ = "M"          # Monthly
-S_ADJ = "SA"        # Seasonally adjusted
-AGE = "TOTAL"       # Total age
-UNIT = "PC_ACT"     # % of active population
-SEX = "T"           # Total sex
+FREQ = "M"  # Monthly
+S_ADJ = "SA"  # Seasonally adjusted
+AGE = "TOTAL"  # Total age
+UNIT = "PC_ACT"  # % of active population
+SEX = "T"  # Total sex
 
 COUNTRY_TO_GEO = {
     "EU": "EU27_2020",

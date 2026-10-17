@@ -17,14 +17,15 @@ from config import DB_PATH
 
 # Метрики сводной таблицы: (ключ в build_summary, человекочитаемое имя)
 SUMMARY_METRICS = [
-    ("inflation", "Инфляция"),
-    ("inflation_mom", "Инфляция MoM"),
-    ("inflation_core", "Core"),
-    ("unemployment", "Безработица"),
-    ("debt_gdp", "Долг/ВВП"),
-    ("budget_gdp", "Бюджет/ВВП"),
-    ("trade_gdp", "Трейд/ВВП"),
-    ("gdp_growth", "Рост ВВП"),
+    ("inflation", "Инфляция YoY, %"),
+    ("inflation_mom", "Инфляция MoM, %"),
+    ("inflation_core", "Core CPI YoY, %"),
+    ("unemployment", "Безработица, %"),
+    ("debt_gdp", "Долг/ВВП, %"),
+    ("budget_gdp", "Бюджет/ВВП, %"),
+    ("trade_gdp", "Трейд/ВВП, %"),
+    ("gdp_growth", "Рост ВВП, % YoY"),
+    ("policy_rate", "Ставка ЦБ, %"),
 ]
 
 TABLE = "summary_snapshots"

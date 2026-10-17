@@ -4,8 +4,8 @@ import pandas as pd
 # ONS — серии CPI
 # Каждая: (URL, что содержит)
 ONS_SERIES = {
-    "yoy":  "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7g7/mm23/data",  # CPI YoY headline
-    "mom":  "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7oe/mm23/data",  # CPI MoM headline
+    "yoy": "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7g7/mm23/data",  # CPI YoY headline
+    "mom": "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7oe/mm23/data",  # CPI MoM headline
     "core": "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/dko8/mm23/data",  # Core CPI YoY
 }
 

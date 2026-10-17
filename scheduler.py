@@ -22,6 +22,7 @@ from src.fetch_imf import fetch_all_imf
 from src.fetch_eurostat import fetch_eurostat_hicp
 from src.fetch_eurostat_unemployment import fetch_eurostat_unemployment
 from src.fetch_eurostat_quarterly import fetch_eurostat_quarterly
+from src.fetch_eurostat_annual import fetch_eurostat_annual
 from src.fetch_singapore_mom import fetch_singapore_unemployment
 from src.fetch_singapore_cpi import fetch_singapore_cpi
 from src.fetch_singapore_gdp import fetch_singapore_gdp
@@ -38,6 +39,7 @@ from src.fetch_switzerland_quarterly import fetch_switzerland_quarterly
 from src.fetch_canada_quarterly import fetch_canada_quarterly
 from src.fetch_policy_rates import fetch_policy_rates
 from src.fetch_china_unemployment import fetch_china_unemployment
+from src.fetch_china_core_cpi import fetch_china_core_cpi
 from src.fetch_india_unemployment import fetch_india_unemployment
 from src.fetch_fred_cpi import fetch_fred_cpi
 from src.fetch_china_cpi import fetch_china_cpi
@@ -56,12 +58,17 @@ from src.fetch_nifd_report import fetch_all_nifd_debt
 from src.fetch_china_fiscal import fetch_china_fiscal
 from src.fetch_china_gdp import fetch_china_gdp
 from src.fetch_us import fetch_us_quarterly
+from src.fetch_us_bea import fetch_us_general_gov_annual
+from src.fetch_bloomberg import fetch_bloomberg
 from src.snapshot import save_weekly_snapshot
+from src.cleanup import cleanup_all, ensure_dirs
+from src.fetch_china_debt_fred import fetch_china_debt_fred
 
 # === Импорты storage ===
 from src.storage import (
     save_fred, save_rss, save_forexfactory, save_imf,
     save_eurostat, save_eurostat_unemployment, save_eurostat_quarterly,
+    save_eurostat_annual,
     save_fred_unemployment, save_fred_gdp,
     save_singapore_unemployment, save_singapore_cpi, save_singapore_gdp,
     save_singapore_quarterly,
@@ -74,17 +81,17 @@ from src.storage import (
     save_switzerland_quarterly,
     save_canada_quarterly,
     save_policy_rates,
-    save_china_unemployment, save_india_unemployment, save_india_gdp,
+    save_china_unemployment, save_china_core_cpi,
+    save_india_unemployment, save_india_gdp,
     save_fred_cpi, save_china_cpi, save_india_cpi, save_uk_cpi, save_canada_cpi, save_australia_cpi,
     save_turkey_cpi, save_switzerland_cpi, save_switzerland_unemployment, save_japan_cpi, save_korea_cpi,
     save_china_debt, save_china_fiscal, save_china_gdp, save_switzerland_gdp,
     save_us_quarterly,
+    save_us_annual_bea,
+    save_bloomberg, save_china_debt_fred,
 )
 
 
-# ============================================================
-# Хелпер: обёртка для одного шага
-# ============================================================
 def _step(name: str, fetch_fn, save_fn):
     """Выполняет один шаг обновления: fetch -> save с обработкой ошибок."""
     print(f"\n--- {name} ---")
@@ -99,15 +106,16 @@ def _step(name: str, fetch_fn, save_fn):
         traceback.print_exc()
 
 
-# ============================================================
-# Группы по странам / источникам
-# ============================================================
 GROUPS = {
+    "bbg": [
+        ("Bloomberg: ручные выгрузки", fetch_bloomberg, save_bloomberg),
+    ],
     "rates": [
         ("Ставки ЦБ (все страны)", fetch_policy_rates, save_policy_rates),
     ],
     "us": [
         ("США: квартальные метрики (Treasury + BEA)", fetch_us_quarterly, save_us_quarterly),
+        ("США: годовые General Gov (BEA + FRED)", fetch_us_general_gov_annual, save_us_annual_bea),
     ],
     "sg": [
         ("Сингапур: безработица", fetch_singapore_unemployment, save_singapore_unemployment),
@@ -149,7 +157,9 @@ GROUPS = {
     ],
     "cn": [
         ("Китай: безработица", fetch_china_unemployment, save_china_unemployment),
+        ("Китай: Core CPI (NBS)", fetch_china_core_cpi, save_china_core_cpi),
         ("Китай: квартальный долг (NIFD)", fetch_all_nifd_debt, save_china_debt),
+        ("Китай: годовой долг (FRED/IMF)", fetch_china_debt_fred, save_china_debt_fred),
         ("Китай: квартальный бюджет и трейд (Минфин + SAFE)", fetch_china_fiscal, save_china_fiscal),
         ("Китай: квартальный рост ВВП (Tonghuashun)", fetch_china_gdp, save_china_gdp),
         ("Китай: CPI", fetch_china_cpi, save_china_cpi),
@@ -175,6 +185,7 @@ GROUPS = {
         ("Eurostat: HICP (инфляция ЕС)", fetch_eurostat_hicp, save_eurostat),
         ("Eurostat: безработица", fetch_eurostat_unemployment, save_eurostat_unemployment),
         ("Eurostat: квартальные макро-метрики", fetch_eurostat_quarterly, save_eurostat_quarterly),
+        ("Eurostat: годовые General Gov", fetch_eurostat_annual, save_eurostat_annual),
     ],
     "extra": [
         ("ForexFactory: календарь", fetch_calendar, save_forexfactory),
@@ -183,9 +194,6 @@ GROUPS = {
 }
 
 
-# ============================================================
-# Вывод справки
-# ============================================================
 def print_help():
     print(__doc__)
     print("Доступные группы:")
@@ -204,13 +212,12 @@ def print_list():
         print()
 
 
-# ============================================================
-# Главный запуск
-# ============================================================
 def run(groups: list[str] | None = None):
     print("=" * 50)
     print("ОБНОВЛЕНИЕ ДАННЫХ")
     print("=" * 50)
+
+    ensure_dirs()
 
     if groups is None:
         selected = list(GROUPS.keys())
@@ -236,6 +243,8 @@ def run(groups: list[str] | None = None):
             save_weekly_snapshot()
         except Exception as e:
             print(f"[ERROR] snapshot: {e}")
+
+    cleanup_all()
 
     print("\n" + "=" * 50)
     print("ГОТОВО")
