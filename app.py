@@ -1,3 +1,4 @@
+from src.storage import load_russia_rates
 import io
 import streamlit as st
 import pandas as pd
@@ -698,3 +699,583 @@ with st.expander("📰 Новости", expanded=False):
                 unsafe_allow_html=True,
             )
             st.divider()
+
+# ============================================================
+# ДЕТАЛЬНЫЕ ДАННЫЕ ПО СТРАНАМ
+# ============================================================
+
+import plotly.graph_objects as go
+
+from src.build_summary import COUNTRY_ORDER
+from src.storage import (
+    load_russia_cpi,
+    load_russia_quarterly,
+)
+
+st.divider()
+st.header("🌍 Данные по странам")
+
+country_options = {
+    code: COUNTRY_NAMES[code]
+    for code in COUNTRY_ORDER
+}
+
+select_col, button_col = st.columns([4, 1])
+
+with select_col:
+    selected_detail_country = st.selectbox(
+        "Выберите страну",
+        options=COUNTRY_ORDER,
+        format_func=lambda code: country_options[code],
+        key="detail_country_selector",
+    )
+
+with button_col:
+    st.write("")
+    st.write("")
+    open_details = st.button(
+        "Данные",
+        key="open_country_details",
+        type="primary",
+        use_container_width=True,
+    )
+
+if open_details:
+    st.session_state["active_detail_country"] = (
+        selected_detail_country
+    )
+
+active_country = st.session_state.get(
+    "active_detail_country"
+)
+
+if active_country is not None:
+    st.divider()
+    st.subheader(
+        f"📊 {country_options[active_country]} — "
+        "детальные данные"
+    )
+
+    if active_country != "RU":
+        st.info(
+            "Детальные показатели этой страны "
+            "пока не подключены. "
+            "Раздел готов к последующему наполнению."
+        )
+
+    else:
+        # ====================================================
+        # РОССИЯ — ПОДКЛЮЧЁННЫЕ РЯДЫ
+        # ====================================================
+
+        ru_cpi = load_russia_cpi()
+        ru_quarterly = load_russia_quarterly()
+        ru_rates = load_policy_rates()
+
+        if not ru_cpi.empty:
+            ru_cpi = (
+                ru_cpi.loc[
+                    ru_cpi["country"] == "RU"
+                    ]
+                .copy()
+            )
+            ru_cpi["date"] = pd.to_datetime(
+                ru_cpi["date"]
+            )
+            ru_cpi = ru_cpi.loc[
+                ru_cpi["date"] >= "2024-01-01"
+                ].sort_values("date")
+
+        if not ru_quarterly.empty:
+            ru_quarterly = (
+                ru_quarterly.loc[
+                    ru_quarterly["country"] == "RU"
+                    ]
+                .copy()
+            )
+            ru_quarterly["date"] = pd.to_datetime(
+                ru_quarterly["date"]
+            )
+            ru_quarterly = ru_quarterly.loc[
+                ru_quarterly["date"] >= "2024-01-01"
+                ].sort_values("date")
+
+        if not ru_rates.empty:
+            ru_rates = (
+                ru_rates.loc[
+                    ru_rates["country"] == "RU"
+                    ]
+                .copy()
+            )
+            ru_rates["date"] = pd.to_datetime(
+                ru_rates["date"]
+            )
+            ru_rates = ru_rates.loc[
+                ru_rates["date"] >= "2024-01-01"
+                ].sort_values("date")
+
+        st.caption(
+            "Россия · История с января 2024 года · "
+            "Официальные данные ЦБ РФ, Росстата "
+            "и Федерального казначейства"
+        )
+
+        # Обзор текущих значений
+        current = build_summary(
+            year=pd.Timestamp.now().year,
+            month=pd.Timestamp.now().month,
+        )
+
+        current_ru = current.loc[
+            current["country"] == "RU"
+            ]
+
+        if not current_ru.empty:
+            latest = current_ru.iloc[0]
+
+            overview = [
+                ("Ключевая ставка", "policy_rate"),
+                ("Инфляция YoY", "inflation"),
+                ("Рост ВВП YoY", "gdp_growth"),
+                ("Безработица", "unemployment"),
+            ]
+
+            overview_cols = st.columns(4)
+
+            for column, (label, metric) in zip(
+                    overview_cols, overview
+            ):
+                value = latest.get(metric)
+                period = latest.get(
+                    f"{metric}_date"
+                )
+
+                value_text = (
+                    f"{float(value):.2f}%"
+                    if pd.notna(value)
+                    else "—"
+                )
+
+                with column:
+                    st.metric(
+                        label,
+                        value_text,
+                        help=(
+                            str(period)
+                            if pd.notna(period)
+                            else None
+                        ),
+                    )
+
+
+        # ----------------------------------------------------
+        # Настройка линейных графиков
+        # ----------------------------------------------------
+
+        def ru_line_chart(
+                data,
+                title,
+                series,
+                unit="%",
+        ):
+            if data.empty:
+                st.info(
+                    f"{title}: данные пока отсутствуют."
+                )
+                return
+
+            fig = go.Figure()
+            plotted = False
+
+            for column, label in series.items():
+                if column not in data.columns:
+                    continue
+
+                valid = data.dropna(
+                    subset=["date", column]
+                ).sort_values("date")
+
+                if valid.empty:
+                    continue
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=valid["date"],
+                        y=valid[column],
+                        mode="lines+markers",
+                        name=label,
+                        line={"width": 2},
+                        marker={"size": 4},
+                    )
+                )
+                plotted = True
+
+            if not plotted:
+                st.info(
+                    f"{title}: данные пока отсутствуют."
+                )
+                return
+
+            fig.update_layout(
+                title=title,
+                xaxis_title="Период",
+                yaxis_title=unit,
+                hovermode="x unified",
+                legend={
+                    "orientation": "h",
+                    "y": -0.25,
+                },
+                margin={
+                    "l": 30,
+                    "r": 20,
+                    "t": 60,
+                    "b": 70,
+                },
+            )
+
+            fig.update_xaxes(
+                range=[
+                    "2024-01-01",
+                    max(
+                        pd.Timestamp.now(),
+                        pd.Timestamp("2024-12-31"),
+                    ),
+                ]
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+            )
+
+
+        # ====================================================
+        # РАЗДЕЛЫ ДЕТАЛЬНОЙ СТРАНИЦЫ
+        # ====================================================
+
+        (
+            rates_tab,
+            inflation_tab,
+            economy_tab,
+            finance_tab,
+            other_tab,
+        ) = st.tabs([
+            "Ставки",
+            "Инфляция",
+            "ВВП и занятость",
+            "Госфинансы",
+            "Другие показатели",
+        ])
+
+
+        with rates_tab:
+            st.subheader(
+                "Процентные ставки Банка России"
+            )
+
+            st.caption(
+                "Рублёвые кредиты и депозиты. "
+                "Средневзвешенные ставки, % годовых. "
+                "История с января 2024 года."
+            )
+
+            labels = {
+                "rate": "Ключевая ставка ЦБ РФ",
+                "company_loans_1y":
+                    "Кредиты компаниям до 1 года",
+                "personal_loans_all":
+                    "Кредиты физлицам — все сроки",
+                "personal_deposits_1y":
+                    "Вклады физлиц до 1 года",
+                "company_deposits_1y":
+                    "Депозиты компаний до 1 года",
+                "auto_loans_old_1y_plus":
+                    "Автокредиты свыше 1 года (2024–2025)",
+                "auto_loans_new_all":
+                    "Автокредиты, все сроки (с февраля 2026)",
+            }
+
+            detail_rates = load_russia_rates()
+
+            if not detail_rates.empty:
+                detail_rates = detail_rates.loc[
+                    detail_rates["country"] == "RU"
+                ].copy()
+
+                detail_rates["date"] = pd.to_datetime(
+                    detail_rates["date"]
+                )
+
+                detail_rates = detail_rates.loc[
+                    detail_rates["date"] >= "2024-01-01"
+                ]
+
+            else:
+                detail_rates = pd.DataFrame(
+                    columns=["date", "country"]
+                )
+
+            # Ключевая ставка из существующей БД.
+            key_rates = load_policy_rates()
+
+            if not key_rates.empty:
+                key_rates = key_rates.loc[
+                    key_rates["country"] == "RU",
+                    ["date", "rate"],
+                ].copy()
+
+                key_rates["date"] = pd.to_datetime(
+                    key_rates["date"]
+                )
+
+                key_rates = key_rates.loc[
+                    key_rates["date"] >= "2024-01-01"
+                ]
+
+                detail_rates = detail_rates.merge(
+                    key_rates,
+                    on="date",
+                    how="outer",
+                )
+
+            detail_rates = detail_rates.sort_values(
+                "date"
+            )
+
+            available = {
+                key: label
+                for key, label in labels.items()
+                if (
+                    key in detail_rates.columns
+                    and detail_rates[key].notna().any()
+                )
+            }
+
+            if not available:
+                st.warning(
+                    "Данные пока отсутствуют. "
+                    "Выполни python scheduler.py ru "
+                    "и python scheduler.py rates."
+                )
+
+            else:
+                selected = st.multiselect(
+                    "Выбери ставки для сравнения",
+                    options=list(available.keys()),
+                    default=list(available.keys()),
+                    format_func=lambda key: available[key],
+                    key="ru_rates_detail_select",
+                )
+
+                if selected:
+                    ru_line_chart(
+                        detail_rates,
+                        "Процентные ставки России",
+                        {
+                            key: available[key]
+                            for key in selected
+                        },
+                        unit="% годовых",
+                    )
+                else:
+                    st.info(
+                        "Выбери хотя бы один показатель."
+                    )
+
+                # Таблица последних значений.
+                latest_rows = []
+
+                for key, label in available.items():
+                    valid = detail_rates[
+                        ["date", key]
+                    ].dropna(subset=[key])
+
+                    valid = valid.sort_values("date")
+
+                    if valid.empty:
+                        continue
+
+                    last = valid.iloc[-1]
+
+                    latest_rows.append({
+                        "Показатель": label,
+                        "Период": last["date"].strftime(
+                            "%m.%Y"
+                        ),
+                        "Ставка, %": round(
+                            float(last[key]), 2
+                        ),
+                    })
+
+                if latest_rows:
+                    st.subheader(
+                        "Последние опубликованные значения"
+                    )
+
+                    st.dataframe(
+                        pd.DataFrame(latest_rows),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+            st.info(
+                "Автокредиты: в 2024–2025 годах "
+                "показана ставка по кредитам "
+                "свыше одного года. С февраля 2026 "
+                "года — ставка по всем срокам. "
+                "Методологии различаются; "
+                "ряды показаны отдельно."
+            )
+
+            st.caption(
+                "Источник: Банк России — статистика "
+                "процентных ставок по кредитам "
+                "и депозитам."
+            )
+
+        with inflation_tab:
+            st.subheader("Инфляция")
+
+            ru_line_chart(
+                ru_cpi,
+                "Потребительские цены",
+                {
+                    "value": "CPI YoY",
+                    "mom": "CPI MoM",
+                    "core": "Core CPI YoY",
+                },
+            )
+
+        with economy_tab:
+            st.subheader("Экономическая активность")
+
+            ru_line_chart(
+                ru_quarterly,
+                "Рост реального ВВП YoY",
+                {"gdp_growth": "Рост ВВП YoY"},
+            )
+
+            ru_line_chart(
+                ru_quarterly,
+                "Уровень безработицы",
+                {"unemployment": "Безработица"},
+            )
+
+            st.caption(
+                "Квартальные показатели: "
+                "по завершённым кварталам."
+            )
+
+        with finance_tab:
+            st.subheader("Государственные финансы")
+
+            ru_line_chart(
+                ru_quarterly,
+                "Государственный долг / ВВП",
+                {"debt_gdp": "Gen Gov, broad debt"},
+            )
+
+            ru_line_chart(
+                ru_quarterly,
+                "Сальдо бюджета / ВВП",
+                {"budget_gdp": "Gen Gov"},
+            )
+
+            ru_line_chart(
+                ru_quarterly,
+                "Текущий счёт / ВВП",
+                {"trade_gdp": "Текущий счёт"},
+            )
+
+            annual_columns = {
+                "annual_debt_gdp": "Долг/ВВП, %",
+                "annual_budget_gdp": "Бюджет/ВВП, %",
+                "annual_trade_gdp": "Текущий счёт/ВВП, %",
+                "annual_gdp_growth": "Рост ВВП YoY, %",
+                "annual_unemployment": "Безработица, %",
+            }
+
+            if not ru_quarterly.empty:
+                available = [
+                    column
+                    for column in annual_columns
+                    if column in ru_quarterly.columns
+                ]
+
+                if available:
+                    annual = ru_quarterly[
+                        ["date"] + available
+                        ].copy()
+
+                    annual = annual.loc[
+                        annual["date"].dt.month == 12
+                        ]
+
+                    annual = annual.dropna(
+                        subset=available,
+                        how="all",
+                    )
+
+                    if not annual.empty:
+                        annual["Год"] = (
+                            annual["date"].dt.year
+                        )
+
+                        annual = annual.rename(
+                            columns=annual_columns
+                        )
+
+                        st.subheader(
+                            "Годовые показатели"
+                        )
+
+                        st.dataframe(
+                            annual[
+                                ["Год"]
+                                + list(
+                                    annual_columns[c]
+                                    for c in available
+                                )
+                                ].round(2),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+
+        with other_tab:
+            st.subheader(
+                "Дополнительные показатели России"
+            )
+
+            st.markdown(
+                """
+                **Банковский сектор**
+                - Кредитование физлиц, компаний и МСП
+                - Денежная масса: M0, M1, M2 и широкая
+                - Ипотечное кредитование
+
+                **Денежный рынок**
+                - RUONIA: объём сделок
+
+                **Внешний сектор**
+                - Экспорт и импорт
+                - Дополнительные показатели
+                  платёжного баланса
+
+                **Финансовые рынки**
+                - Вложения частных инвесторов
+                - Активные инвесторы
+                - Доля физлиц в обороте
+                - Индивидуальные инвестиционные счета
+
+                **Справочные данные ЦБ РФ**
+                - Брокеры
+                - ИИС
+                - Коллективные инвестиции
+                """
+            )
+
+            st.caption(
+                "Эти показатели предусмотрены "
+                "в детальном разделе, но загрузчики "
+                "для них пока не подключены."
+            )

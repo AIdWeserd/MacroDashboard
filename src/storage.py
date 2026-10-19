@@ -1,3 +1,4 @@
+
 import sqlite3
 import pandas as pd
 from config import DB_PATH
@@ -31,657 +32,393 @@ def clear_table(name: str):
 
 def clear_all():
     for t in (
-            "fred", "fred_cpi", "fred_unemployment", "fred_gdp",
-            "imf",
-            "eurostat", "eurostat_unemployment", "eurostat_quarterly",
-            "eurostat_annual",
-            "forexfactory", "rss",
-            "singapore_unemployment", "singapore_cpi", "singapore_gdp",
-            "singapore_quarterly",
-            "brazil_unemployment", "brazil_cpi", "brazil_gdp",
-            "brazil_quarterly",
-            "uk_quarterly",
-            "china_unemployment", "china_cpi", "china_debt", "china_debt_fred",
-            "china_fiscal", "china_gdp", "china_core_cpi",
-            "india_unemployment", "india_cpi", "india_gdp",
-            "uk_cpi",
-            "canada_cpi", "canada_quarterly",
-            "australia_cpi", "australia_quarterly",
-            "turkey_cpi",
-            "switzerland_cpi", "switzerland_unemployment", "switzerland_gdp",
-            "switzerland_quarterly",
-            "japan_cpi",
-            "korea_cpi", "korea_quarterly",
-            "us_quarterly", "us_annual_bea",
-            "japan_quarterly",
-            "policy_rates",
-            "bloomberg",
+        "fred", "fred_cpi", "fred_unemployment", "fred_gdp",
+        "imf", "eurostat", "eurostat_unemployment",
+        "eurostat_quarterly", "eurostat_annual",
+        "forexfactory", "rss",
+        "singapore_unemployment", "singapore_cpi",
+        "singapore_gdp", "singapore_quarterly",
+        "brazil_unemployment", "brazil_cpi",
+        "brazil_gdp", "brazil_quarterly",
+        "uk_quarterly",
+        "china_unemployment", "china_cpi", "china_debt",
+        "china_debt_fred", "china_fiscal", "china_gdp",
+        "china_core_cpi",
+        "india_unemployment", "india_cpi", "india_gdp",
+        "uk_cpi", "canada_cpi", "canada_quarterly",
+        "australia_cpi", "australia_quarterly",
+        "turkey_cpi",
+        "switzerland_cpi", "switzerland_unemployment",
+        "switzerland_gdp", "switzerland_quarterly",
+        "japan_cpi", "korea_cpi", "korea_quarterly",
+        "us_quarterly", "us_annual_bea",
+        "japan_quarterly",
+        "russia_cpi", "russia_quarterly", "russia_rates",
+        "policy_rates", "bloomberg",
     ):
         clear_table(t)
 
 
 # ============================================================
-# FRED — исторические макро-ряды
+# Стандартные операции хранения
 # ============================================================
-def save_fred(df: pd.DataFrame):
-    _save_df(df, "fred")
+
+# В каждом имени: (имя таблицы, поле даты).
+# Для таблиц без даты указано None.
+STANDARD_TABLES = {
+    "fred": "date",
+    "forexfactory": "datetime",
+    "rss": "published",
+    "imf": None,
+    "eurostat": "date",
+    "eurostat_unemployment": "date",
+    "eurostat_quarterly": "date",
+    "eurostat_annual": "date",
+    "fred_unemployment": "date",
+    "fred_cpi": "date",
+    "fred_gdp": "date",
+    "singapore_unemployment": "date",
+    "singapore_cpi": "date",
+    "singapore_gdp": "date",
+    "singapore_quarterly": "date",
+    "brazil_unemployment": "date",
+    "brazil_cpi": "date",
+    "brazil_gdp": "date",
+    "brazil_quarterly": "date",
+    "uk_quarterly": "date",
+    "china_unemployment": "date",
+    "china_cpi": "date",
+    "china_debt": "date",
+    "china_debt_fred": "date",
+    "china_gdp": "date",
+    "india_unemployment": "date",
+    "india_gdp": "date",
+    "uk_cpi": "date",
+    "canada_cpi": "date",
+    "canada_quarterly": "date",
+    "australia_cpi": "date",
+    "australia_quarterly": "date",
+    "turkey_cpi": "date",
+    "switzerland_cpi": "date",
+    "switzerland_unemployment": "date",
+    "switzerland_gdp": "date",
+    "switzerland_quarterly": "date",
+    "japan_cpi": "date",
+    "korea_cpi": "date",
+    "korea_quarterly": "date",
+    "us_quarterly": "date",
+    "us_annual_bea": "date",
+    "japan_quarterly": "date",
+    "russia_rates": "date",
+    "policy_rates": "date",
+    "bloomberg": "date",
+}
 
 
-def load_fred() -> pd.DataFrame:
-    return _load_df("fred", parse_dates=["date"])
+def _register_standard_functions():
+    """
+    Создаёт привычные save_* / load_* функции
+    для стандартных таблиц проекта.
+    """
+
+    for table, date_col in STANDARD_TABLES.items():
+
+        def make_save(table_name):
+            def save(df: pd.DataFrame):
+                _save_df(df, table_name)
+            save.__name__ = f"save_{table_name}"
+            return save
+
+        def make_load(table_name, date_column):
+            def load() -> pd.DataFrame:
+                df = _load_df(
+                    table_name,
+                    parse_dates=[date_column] if date_column else None,
+                )
+
+                if table_name == "rss" and not df.empty:
+                    df = df.sort_values(
+                        "published",
+                        ascending=False,
+                    )
+
+                return df
+
+            load.__name__ = f"load_{table_name}"
+            return load
+
+        globals()[f"save_{table}"] = make_save(table)
+        globals()[f"load_{table}"] = make_load(
+            table, date_col
+        )
 
 
-# ============================================================
-# ForexFactory
-# ============================================================
-def save_forexfactory(df: pd.DataFrame):
-    _save_df(df, "forexfactory")
-
-
-def load_forexfactory() -> pd.DataFrame:
-    return _load_df("forexfactory", parse_dates=["datetime"])
-
-
-# ============================================================
-# RSS
-# ============================================================
-def save_rss(df: pd.DataFrame):
-    _save_df(df, "rss")
-
-
-def load_rss() -> pd.DataFrame:
-    df = _load_df("rss", parse_dates=["published"])
-    if not df.empty:
-        df = df.sort_values("published", ascending=False)
-    return df
-
-
-# ============================================================
-# IMF
-# ============================================================
-def save_imf(df: pd.DataFrame):
-    _save_df(df, "imf")
-
-
-def load_imf() -> pd.DataFrame:
-    return _load_df("imf")
-
-
-# ============================================================
-# Eurostat — HICP
-# ============================================================
-def save_eurostat(df: pd.DataFrame):
-    _save_df(df, "eurostat")
-
-
-def load_eurostat() -> pd.DataFrame:
-    return _load_df("eurostat", parse_dates=["date"])
-
-
-# ============================================================
-# Eurostat — безработица
-# ============================================================
-def save_eurostat_unemployment(df: pd.DataFrame):
-    _save_df(df, "eurostat_unemployment")
-
-
-def load_eurostat_unemployment() -> pd.DataFrame:
-    return _load_df("eurostat_unemployment", parse_dates=["date"])
-
-
-# ============================================================
-# Eurostat — квартальные макро-метрики
-# ============================================================
-def save_eurostat_quarterly(df: pd.DataFrame):
-    _save_df(df, "eurostat_quarterly")
-
-
-def load_eurostat_quarterly() -> pd.DataFrame:
-    return _load_df("eurostat_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Eurostat — годовые General Gov метрики
-# ============================================================
-def save_eurostat_annual(df: pd.DataFrame):
-    _save_df(df, "eurostat_annual")
-
-
-def load_eurostat_annual() -> pd.DataFrame:
-    return _load_df("eurostat_annual", parse_dates=["date"])
-
-
-# ============================================================
-# FRED — безработица (не-ЕС)
-# ============================================================
-def save_fred_unemployment(df: pd.DataFrame):
-    _save_df(df, "fred_unemployment")
-
-
-def load_fred_unemployment() -> pd.DataFrame:
-    return _load_df("fred_unemployment", parse_dates=["date"])
+_register_standard_functions()
 
 
 # ============================================================
-# FRED — CPI
+# Китай — Core CPI
 # ============================================================
-def save_fred_cpi(df: pd.DataFrame):
-    _save_df(df, "fred_cpi")
+
+def _last_notna(series):
+    series = series.dropna()
+    return series.iloc[-1] if not series.empty else None
 
 
-def load_fred_cpi() -> pd.DataFrame:
-    return _load_df("fred_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# FRED — квартальный Real GDP
-# ============================================================
-def save_fred_gdp(df: pd.DataFrame):
-    _save_df(df, "fred_gdp")
-
-
-def load_fred_gdp() -> pd.DataFrame:
-    return _load_df("fred_gdp", parse_dates=["date"])
-
-
-# ============================================================
-# Сингапур — безработица
-# ============================================================
-def save_singapore_unemployment(df: pd.DataFrame):
-    _save_df(df, "singapore_unemployment")
-
-
-def load_singapore_unemployment() -> pd.DataFrame:
-    return _load_df("singapore_unemployment", parse_dates=["date"])
-
-
-# ============================================================
-# Сингапур — CPI
-# ============================================================
-def save_singapore_cpi(df: pd.DataFrame):
-    _save_df(df, "singapore_cpi")
-
-
-def load_singapore_cpi() -> pd.DataFrame:
-    return _load_df("singapore_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Сингапур — квартальный рост ВВП
-# ============================================================
-def save_singapore_gdp(df: pd.DataFrame):
-    _save_df(df, "singapore_gdp")
-
-
-def load_singapore_gdp() -> pd.DataFrame:
-    return _load_df("singapore_gdp", parse_dates=["date"])
-
-
-# ============================================================
-# Сингапур — квартальные метрики
-# ============================================================
-def save_singapore_quarterly(df: pd.DataFrame):
-    _save_df(df, "singapore_quarterly")
-
-
-def load_singapore_quarterly() -> pd.DataFrame:
-    return _load_df("singapore_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Бразилия — безработица
-# ============================================================
-def save_brazil_unemployment(df: pd.DataFrame):
-    _save_df(df, "brazil_unemployment")
-
-
-def load_brazil_unemployment() -> pd.DataFrame:
-    return _load_df("brazil_unemployment", parse_dates=["date"])
-
-
-# ============================================================
-# Бразилия — CPI
-# ============================================================
-def save_brazil_cpi(df: pd.DataFrame):
-    _save_df(df, "brazil_cpi")
-
-
-def load_brazil_cpi() -> pd.DataFrame:
-    return _load_df("brazil_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Бразилия — квартальный рост ВВП
-# ============================================================
-def save_brazil_gdp(df: pd.DataFrame):
-    _save_df(df, "brazil_gdp")
-
-
-def load_brazil_gdp() -> pd.DataFrame:
-    return _load_df("brazil_gdp", parse_dates=["date"])
-
-
-# ============================================================
-# Бразилия — квартальные метрики
-# ============================================================
-def save_brazil_quarterly(df: pd.DataFrame):
-    _save_df(df, "brazil_quarterly")
-
-
-def load_brazil_quarterly() -> pd.DataFrame:
-    return _load_df("brazil_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Великобритания — квартальные метрики (ONS)
-# ============================================================
-def save_uk_quarterly(df: pd.DataFrame):
-    _save_df(df, "uk_quarterly")
-
-
-def load_uk_quarterly() -> pd.DataFrame:
-    return _load_df("uk_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Китай — безработица
-# ============================================================
-def save_china_unemployment(df: pd.DataFrame):
-    _save_df(df, "china_unemployment")
-
-
-def load_china_unemployment() -> pd.DataFrame:
-    return _load_df("china_unemployment", parse_dates=["date"])
-
-
-# ============================================================
-# Китай — CPI
-# ============================================================
-def save_china_cpi(df: pd.DataFrame):
-    _save_df(df, "china_cpi")
-
-
-def load_china_cpi() -> pd.DataFrame:
-    return _load_df("china_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Китай — Core CPI (NBS), с накоплением
-# ============================================================
-def save_china_core_cpi(df: pd.DataFrame):
-    if df.empty:
-        print("[SKIP] china_core_cpi: пустой DataFrame")
+def _save_merged_rows(
+    df: pd.DataFrame,
+    table: str,
+    columns: list[str],
+):
+    if df is None or df.empty:
+        print(f"[SKIP] {table}: пустой DataFrame")
         return
+
+    new = df.copy()
+    new["date"] = pd.to_datetime(new["date"])
 
     with _connect() as con:
         try:
-            existing = pd.read_sql("SELECT * FROM china_core_cpi", con)
+            old = pd.read_sql(
+                f"SELECT * FROM {table}",
+                con,
+                parse_dates=["date"],
+            )
         except Exception:
-            existing = pd.DataFrame()
+            old = pd.DataFrame()
 
-        if not existing.empty:
-            existing["date"] = pd.to_datetime(existing["date"])
-            new = df.copy()
-            new["date"] = pd.to_datetime(new["date"])
+        if not old.empty:
+            combined = pd.concat(
+                [old, new],
+                ignore_index=True,
+            )
 
-            combined = pd.concat([existing, new], ignore_index=True)
-
-            def _last_notna(s):
-                s = s.dropna()
-                return s.iloc[-1] if not s.empty else None
-
-            combined = combined.groupby("date", as_index=False).agg({
+            aggregations = {
                 "country": "first",
-                "inflation_core": _last_notna,
-            })
+            }
+
+            for column in columns:
+                aggregations[column] = _last_notna
+
+            combined = (
+                combined.groupby(
+                    "date",
+                    as_index=False,
+                ).agg(aggregations)
+            )
         else:
-            combined = df.copy()
+            combined = new
 
-        combined = combined.sort_values("date").reset_index(drop=True)
-        combined.to_sql("china_core_cpi", con, if_exists="replace", index=False)
+        combined = (
+            combined.sort_values("date")
+            .reset_index(drop=True)
+        )
 
-    print(f"[SAVE] china_core_cpi: {len(combined)} строк (обновлено {len(df)})")
+        combined.to_sql(
+            table,
+            con,
+            if_exists="replace",
+            index=False,
+        )
+
+    print(
+        f"[SAVE] {table}: {len(combined)} строк "
+        f"(обновлено {len(df)})"
+    )
+
+
+def save_china_core_cpi(df: pd.DataFrame):
+    _save_merged_rows(
+        df,
+        "china_core_cpi",
+        ["inflation_core"],
+    )
 
 
 def load_china_core_cpi() -> pd.DataFrame:
-    return _load_df("china_core_cpi", parse_dates=["date"])
+    return _load_df(
+        "china_core_cpi",
+        parse_dates=["date"],
+    )
 
 
 # ============================================================
-# Китай — квартальный долг (NIFD)
+# Китай — квартальные бюджет и текущий счёт
 # ============================================================
-def save_china_debt(df: pd.DataFrame):
-    _save_df(df, "china_debt")
 
-
-def load_china_debt() -> pd.DataFrame:
-    return _load_df("china_debt", parse_dates=["date"])
-
-
-# ============================================================
-# Китай — годовой долг (FRED / IMF WEO)
-# ============================================================
-def save_china_debt_fred(df: pd.DataFrame):
-    _save_df(df, "china_debt_fred")
-
-
-def load_china_debt_fred() -> pd.DataFrame:
-    return _load_df("china_debt_fred", parse_dates=["date"])
-
-
-# ============================================================
-# Китай — квартальный бюджет и трейд
-# ============================================================
 def save_china_fiscal(df: pd.DataFrame):
-    if df.empty:
-        print("[SKIP] china_fiscal: пустой DataFrame")
-        return
-
-    with _connect() as con:
-        try:
-            existing = pd.read_sql("SELECT * FROM china_fiscal", con)
-        except Exception:
-            existing = pd.DataFrame()
-
-        if not existing.empty:
-            existing["date"] = pd.to_datetime(existing["date"])
-            new = df.copy()
-            new["date"] = pd.to_datetime(new["date"])
-
-            combined = pd.concat([existing, new], ignore_index=True)
-
-            def _last_notna(s):
-                s = s.dropna()
-                return s.iloc[-1] if not s.empty else None
-
-            combined = combined.groupby("date", as_index=False).agg({
-                "country": "first",
-                "budget_gdp": _last_notna,
-                "trade_gdp": _last_notna,
-            })
-        else:
-            combined = df.copy()
-
-        combined = combined.sort_values("date").reset_index(drop=True)
-        combined.to_sql("china_fiscal", con, if_exists="replace", index=False)
-
-    print(f"[SAVE] china_fiscal: {len(combined)} строк (обновлено {len(df)})")
+    _save_merged_rows(
+        df,
+        "china_fiscal",
+        ["budget_gdp", "trade_gdp"],
+    )
 
 
 def load_china_fiscal() -> pd.DataFrame:
-    return _load_df("china_fiscal", parse_dates=["date"])
+    return _load_df(
+        "china_fiscal",
+        parse_dates=["date"],
+    )
 
 
 # ============================================================
-# Китай — квартальный рост ВВП
+# Индия — CPI
 # ============================================================
-def save_china_gdp(df: pd.DataFrame):
-    _save_df(df, "china_gdp")
 
-
-def load_china_gdp() -> pd.DataFrame:
-    return _load_df("china_gdp", parse_dates=["date"])
-
-
-# ============================================================
-# Индия — безработица
-# ============================================================
-def save_india_unemployment(df: pd.DataFrame):
-    _save_df(df, "india_unemployment")
-
-
-def load_india_unemployment() -> pd.DataFrame:
-    return _load_df("india_unemployment", parse_dates=["date"])
-
-
-# ============================================================
-# Индия — CPI, с накоплением
-# ============================================================
 def save_india_cpi(df: pd.DataFrame):
-    if df.empty:
-        print("[SKIP] india_cpi: пустой DataFrame")
-        return
-
-    with _connect() as con:
-        try:
-            existing = pd.read_sql("SELECT * FROM india_cpi", con)
-        except Exception:
-            existing = pd.DataFrame()
-
-        if not existing.empty:
-            existing["date"] = pd.to_datetime(existing["date"])
-            new = df.copy()
-            new["date"] = pd.to_datetime(new["date"])
-
-            combined = pd.concat([existing, new], ignore_index=True)
-
-            def _last_notna(s):
-                s = s.dropna()
-                return s.iloc[-1] if not s.empty else None
-
-            combined = combined.groupby("date", as_index=False).agg({
-                "country": "first",
-                "value": _last_notna,
-                "mom": _last_notna,
-                "core": _last_notna,
-            })
-        else:
-            combined = df.copy()
-
-        combined = combined.sort_values("date").reset_index(drop=True)
-        combined.to_sql("india_cpi", con, if_exists="replace", index=False)
-
-    print(f"[SAVE] india_cpi: {len(combined)} строк (обновлено {len(df)})")
+    _save_merged_rows(
+        df,
+        "india_cpi",
+        ["value", "mom", "core"],
+    )
 
 
 def load_india_cpi() -> pd.DataFrame:
-    return _load_df("india_cpi", parse_dates=["date"])
+    return _load_df(
+        "india_cpi",
+        parse_dates=["date"],
+    )
 
 
 # ============================================================
-# Индия — квартальный рост ВВП (MoSPI MCP, NAS)
+# Россия — CPI
 # ============================================================
-def save_india_gdp(df: pd.DataFrame):
-    _save_df(df, "india_gdp")
+
+def save_russia_cpi(df: pd.DataFrame):
+    if df is None or df.empty:
+        print("[SKIP] russia_cpi: пустой DataFrame")
+        return
+
+    new = df.copy()
+    new["date"] = pd.to_datetime(new["date"])
+
+    if (
+        new["date"].isna().any()
+        or new["date"].duplicated().any()
+    ):
+        raise ValueError(
+            "russia_cpi: некорректные или "
+            "повторяющиеся даты"
+        )
+
+    if not new["country"].eq("RU").all():
+        raise ValueError(
+            "russia_cpi: обнаружена страна, "
+            "отличная от RU"
+        )
+
+    old = _load_df(
+        "russia_cpi",
+        parse_dates=["date"],
+    )
+
+    if not old.empty:
+        # Месячные данные нормализуются на конец месяца.
+        # Это исключает дубли при переходе со старого
+        # источника на бюллетень ЦБ.
+        old["date"] = (
+            pd.to_datetime(old["date"])
+            + pd.offsets.MonthEnd(0)
+        )
+
+        old = old.drop_duplicates(
+            subset=["date"],
+            keep="last",
+        )
+
+        old = old.set_index("date")
+        new = new.set_index("date")
+
+        combined = (
+            new.combine_first(old)
+            .reset_index()
+        )
+    else:
+        combined = new
+
+    combined = (
+        combined.sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    _save_df(combined, "russia_cpi")
 
 
-def load_india_gdp() -> pd.DataFrame:
-    return _load_df("india_gdp", parse_dates=["date"])
-
-
-# ============================================================
-# Великобритания — CPI
-# ============================================================
-def save_uk_cpi(df: pd.DataFrame):
-    _save_df(df, "uk_cpi")
-
-
-def load_uk_cpi() -> pd.DataFrame:
-    return _load_df("uk_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Канада — CPI
-# ============================================================
-def save_canada_cpi(df: pd.DataFrame):
-    _save_df(df, "canada_cpi")
-
-
-def load_canada_cpi() -> pd.DataFrame:
-    return _load_df("canada_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Канада — квартальные метрики (StatCan WDS)
-# ============================================================
-def save_canada_quarterly(df: pd.DataFrame):
-    _save_df(df, "canada_quarterly")
-
-
-def load_canada_quarterly() -> pd.DataFrame:
-    return _load_df("canada_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Австралия — CPI
-# ============================================================
-def save_australia_cpi(df: pd.DataFrame):
-    _save_df(df, "australia_cpi")
-
-
-def load_australia_cpi() -> pd.DataFrame:
-    return _load_df("australia_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Австралия — квартальные метрики
-# ============================================================
-def save_australia_quarterly(df: pd.DataFrame):
-    _save_df(df, "australia_quarterly")
-
-
-def load_australia_quarterly() -> pd.DataFrame:
-    return _load_df("australia_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Турция — CPI
-# ============================================================
-def save_turkey_cpi(df: pd.DataFrame):
-    _save_df(df, "turkey_cpi")
-
-
-def load_turkey_cpi() -> pd.DataFrame:
-    return _load_df("turkey_cpi", parse_dates=["date"])
+def load_russia_cpi() -> pd.DataFrame:
+    return _load_df(
+        "russia_cpi",
+        parse_dates=["date"],
+    )
 
 
 # ============================================================
-# Швейцария — CPI
+# Россия — квартальные финансовые показатели
 # ============================================================
-def save_switzerland_cpi(df: pd.DataFrame):
-    _save_df(df, "switzerland_cpi")
+
+def save_russia_quarterly(df: pd.DataFrame):
+    if df is None or df.empty:
+        print("[SKIP] russia_quarterly: пусто")
+        return
+
+    required = {
+        "date",
+        "country",
+        "debt_gdp",
+        "budget_gdp",
+        "trade_gdp",
+    }
+
+    missing = required - set(df.columns)
+
+    if missing:
+        raise ValueError(
+            f"russia_quarterly: нет колонок {missing}"
+        )
+
+    new = df.copy()
+
+    new["date"] = pd.to_datetime(new["date"])
+
+    if (
+        new["date"].isna().any()
+        or new["date"].duplicated().any()
+    ):
+        raise ValueError(
+            "russia_quarterly: даты некорректны "
+            "или повторяются"
+        )
+
+    if not new["country"].eq("RU").all():
+        raise ValueError(
+            "russia_quarterly: неверная страна"
+        )
+
+    old = _load_df(
+        "russia_quarterly",
+        parse_dates=["date"],
+    )
+
+    if not old.empty:
+        combined = (
+            new.set_index("date")
+            .combine_first(
+                old.set_index("date")
+            )
+            .reset_index()
+        )
+    else:
+        combined = new
+
+    combined = combined.sort_values("date")
+
+    _save_df(
+        combined,
+        "russia_quarterly",
+    )
 
 
-def load_switzerland_cpi() -> pd.DataFrame:
-    return _load_df("switzerland_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Швейцария — безработица
-# ============================================================
-def save_switzerland_unemployment(df: pd.DataFrame):
-    _save_df(df, "switzerland_unemployment")
-
-
-def load_switzerland_unemployment() -> pd.DataFrame:
-    return _load_df("switzerland_unemployment", parse_dates=["date"])
-
-
-# ============================================================
-# Швейцария — квартальный рост ВВП (SECO)
-# ============================================================
-def save_switzerland_gdp(df: pd.DataFrame):
-    _save_df(df, "switzerland_gdp")
-
-
-def load_switzerland_gdp() -> pd.DataFrame:
-    return _load_df("switzerland_gdp", parse_dates=["date"])
-
-
-# ============================================================
-# Швейцария — квартальные метрики
-# ============================================================
-def save_switzerland_quarterly(df: pd.DataFrame):
-    _save_df(df, "switzerland_quarterly")
-
-
-def load_switzerland_quarterly() -> pd.DataFrame:
-    return _load_df("switzerland_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Япония — CPI
-# ============================================================
-def save_japan_cpi(df: pd.DataFrame):
-    _save_df(df, "japan_cpi")
-
-
-def load_japan_cpi() -> pd.DataFrame:
-    return _load_df("japan_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Южная Корея — CPI
-# ============================================================
-def save_korea_cpi(df: pd.DataFrame):
-    _save_df(df, "korea_cpi")
-
-
-def load_korea_cpi() -> pd.DataFrame:
-    return _load_df("korea_cpi", parse_dates=["date"])
-
-
-# ============================================================
-# Южная Корея — квартальные метрики (IMF DSBB)
-# ============================================================
-def save_korea_quarterly(df: pd.DataFrame):
-    _save_df(df, "korea_quarterly")
-
-
-def load_korea_quarterly() -> pd.DataFrame:
-    return _load_df("korea_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# США — квартальные метрики (Treasury + BEA)
-# ============================================================
-def save_us_quarterly(df: pd.DataFrame):
-    _save_df(df, "us_quarterly")
-
-
-def load_us_quarterly() -> pd.DataFrame:
-    return _load_df("us_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# США — годовые General Gov (BEA NIPA)
-# ============================================================
-def save_us_annual_bea(df: pd.DataFrame):
-    _save_df(df, "us_annual_bea")
-
-
-def load_us_annual_bea() -> pd.DataFrame:
-    return _load_df("us_annual_bea", parse_dates=["date"])
-
-
-# ============================================================
-# Япония — квартальные метрики
-# ============================================================
-def save_japan_quarterly(df: pd.DataFrame):
-    _save_df(df, "japan_quarterly")
-
-
-def load_japan_quarterly() -> pd.DataFrame:
-    return _load_df("japan_quarterly", parse_dates=["date"])
-
-
-# ============================================================
-# Ставки ЦБ (policy rates)
-# ============================================================
-def save_policy_rates(df: pd.DataFrame):
-    _save_df(df, "policy_rates")
-
-
-def load_policy_rates() -> pd.DataFrame:
-    return _load_df("policy_rates", parse_dates=["date"])
-
-
-# ============================================================
-# Bloomberg (ручные выгрузки)
-# ============================================================
-def save_bloomberg(df: pd.DataFrame):
-    _save_df(df, "bloomberg")
-
-
-def load_bloomberg() -> pd.DataFrame:
-    return _load_df("bloomberg", parse_dates=["date"])
+def load_russia_quarterly() -> pd.DataFrame:
+    return _load_df(
+        "russia_quarterly",
+        parse_dates=["date"],
+    )

@@ -1,18 +1,18 @@
+
 """
 Планировщик обновления данных.
 
 Использование:
     python scheduler.py            — обновить всё
-    python scheduler.py china      — обновить только Китай
-    python scheduler.py china us   — обновить Китай и США
-    python scheduler.py --list     — показать список стран
-    python scheduler.py --help     — эта справка
+    python scheduler.py ru         — обновить Россию
+    python scheduler.py china      — обновить выбранную группу
+    python scheduler.py --list     — показать список групп
+    python scheduler.py --help     — справка
 """
 
 import sys
 import traceback
 
-# === Импорты фетчеров ===
 from src.fetch_fred import fetch_all_macro
 from src.fetch_fred_unemployment import fetch_fred_unemployment
 from src.fetch_fred_gdp import fetch_fred_gdp
@@ -63,8 +63,9 @@ from src.fetch_bloomberg import fetch_bloomberg
 from src.snapshot import save_weekly_snapshot
 from src.cleanup import cleanup_all, ensure_dirs
 from src.fetch_china_debt_fred import fetch_china_debt_fred
+from src.fetch_russia import fetch_russia_cpi, fetch_russia_quarterly
+from src.Russia.rates import fetch_russia_rates
 
-# === Импорты storage ===
 from src.storage import (
     save_fred, save_rss, save_forexfactory, save_imf,
     save_eurostat, save_eurostat_unemployment, save_eurostat_quarterly,
@@ -83,24 +84,31 @@ from src.storage import (
     save_policy_rates,
     save_china_unemployment, save_china_core_cpi,
     save_india_unemployment, save_india_gdp,
-    save_fred_cpi, save_china_cpi, save_india_cpi, save_uk_cpi, save_canada_cpi, save_australia_cpi,
-    save_turkey_cpi, save_switzerland_cpi, save_switzerland_unemployment, save_japan_cpi, save_korea_cpi,
-    save_china_debt, save_china_fiscal, save_china_gdp, save_switzerland_gdp,
+    save_fred_cpi, save_china_cpi, save_india_cpi,
+    save_uk_cpi, save_canada_cpi, save_australia_cpi,
+    save_turkey_cpi, save_switzerland_cpi,
+    save_switzerland_unemployment, save_japan_cpi, save_korea_cpi,
+    save_china_debt, save_china_fiscal, save_china_gdp,
+    save_switzerland_gdp,
     save_us_quarterly,
     save_us_annual_bea,
     save_bloomberg, save_china_debt_fred,
+    save_russia_cpi, save_russia_quarterly, save_russia_rates,
 )
 
 
 def _step(name: str, fetch_fn, save_fn):
-    """Выполняет один шаг обновления: fetch -> save с обработкой ошибок."""
+    """Выполняет один шаг обновления: fetch -> save."""
     print(f"\n--- {name} ---")
+
     try:
         df = fetch_fn()
+
         if df is not None and not df.empty:
             save_fn(df)
         else:
             print(f"[WARN] {name}: нет данных")
+
     except Exception as e:
         print(f"[ERROR] {name}: {e}")
         traceback.print_exc()
@@ -172,6 +180,24 @@ GROUPS = {
     "tr": [
         ("Турция: CPI", fetch_turkey_cpi, save_turkey_cpi),
     ],
+    "ru": [
+        (
+            "Россия: CPI YoY + MoM + Core (ЦБ РФ)",
+            fetch_russia_cpi,
+            save_russia_cpi,
+        ),
+        (
+            "Россия: долг, бюджет, текущий счёт (Казначейство + Росстат + ЦБ)",
+            fetch_russia_quarterly,
+            save_russia_quarterly,
+        ),
+        (
+            "Россия: процентные ставки "
+            "по кредитам и депозитам (ЦБ РФ)",
+            fetch_russia_rates,
+            save_russia_rates,
+        ),
+    ],
     "fred": [
         ("FRED: макро-ряды", fetch_all_macro, save_fred),
         ("FRED: квартальный GDP", fetch_fred_gdp, save_fred_gdp),
@@ -197,6 +223,7 @@ GROUPS = {
 def print_help():
     print(__doc__)
     print("Доступные группы:")
+
     for key in GROUPS:
         count = len(GROUPS[key])
         print(f"  {key:10s} — {count} шаг(ов)")
@@ -205,10 +232,13 @@ def print_help():
 def print_list():
     print("Доступные группы для выборочного запуска:")
     print()
+
     for key, steps in GROUPS.items():
         print(f"  {key}:")
+
         for name, _, _ in steps:
             print(f"    - {name}")
+
         print()
 
 
@@ -224,7 +254,12 @@ def run(groups: list[str] | None = None):
     else:
         selected = groups
 
-    unknown = [g for g in selected if g not in GROUPS]
+    unknown = [
+        group
+        for group in selected
+        if group not in GROUPS
+    ]
+
     if unknown:
         print(f"[ERROR] Неизвестные группы: {unknown}")
         print_help()
@@ -234,13 +269,16 @@ def run(groups: list[str] | None = None):
         print(f"\n{'=' * 50}")
         print(f"ГРУППА: {group}")
         print("=" * 50)
+
         for name, fetch_fn, save_fn in GROUPS[group]:
             _step(name, fetch_fn, save_fn)
 
     if groups is None:
-        print("\n--- Снимок сводной таблицы (для подсветки) ---")
+        print("\n--- Снимок сводной таблицы ---")
+
         try:
             save_weekly_snapshot()
+
         except Exception as e:
             print(f"[ERROR] snapshot: {e}")
 
@@ -256,9 +294,12 @@ if __name__ == "__main__":
 
     if not args:
         run()
+
     elif args[0] in ("--help", "-h"):
         print_help()
+
     elif args[0] == "--list":
         print_list()
+
     else:
         run(groups=args)
