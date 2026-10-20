@@ -710,6 +710,7 @@ from src.build_summary import COUNTRY_ORDER
 from src.storage import (
     load_russia_cpi,
     load_russia_quarterly,
+    load_russia_credit,
 )
 
 st.divider()
@@ -958,12 +959,14 @@ if active_country is not None:
             inflation_tab,
             economy_tab,
             finance_tab,
+            credit_tab,
             other_tab,
         ) = st.tabs([
             "Ставки",
             "Инфляция",
             "ВВП и занятость",
             "Госфинансы",
+            "Кредитование",
             "Другие показатели",
         ])
 
@@ -1241,6 +1244,97 @@ if active_country is not None:
                             use_container_width=True,
                         )
 
+        with credit_tab:
+            st.subheader("Задолженность по кредитам")
+            st.caption(
+                "Банк России · Остатки задолженности на 1-е число месяца · "
+                "млрд рублей · Период с января 2024 года"
+            )
+
+            credit_data = load_russia_credit()
+            credit_labels = {
+                "personal_debt": "Кредиты физическим лицам",
+                "company_debt": "Кредиты юридическим лицам и ИП",
+                "sme_debt": "Кредиты субъектам МСП",
+            }
+
+            if credit_data.empty:
+                st.warning(
+                    "История задолженности пока не загружена. "
+                    "Выполни python scheduler.py ru."
+                )
+            else:
+                credit_data = credit_data.loc[
+                    credit_data["country"] == "RU"
+                ].copy()
+                credit_data["date"] = pd.to_datetime(
+                    credit_data["date"]
+                )
+                credit_data = credit_data.loc[
+                    credit_data["date"] >= "2024-01-01"
+                ].sort_values("date")
+
+                available_credit = {
+                    key: label
+                    for key, label in credit_labels.items()
+                    if key in credit_data.columns
+                    and credit_data[key].notna().any()
+                }
+
+                if not available_credit:
+                    st.info("Нет доступных показателей задолженности.")
+                else:
+                    selected_credit = st.multiselect(
+                        "Показатели для графика",
+                        options=list(available_credit),
+                        default=list(available_credit),
+                        format_func=lambda key: available_credit[key],
+                        key="ru_credit_selected",
+                    )
+
+                    if selected_credit:
+                        ru_line_chart(
+                            credit_data,
+                            "Задолженность по кредитам в России",
+                            {
+                                key: available_credit[key]
+                                for key in selected_credit
+                            },
+                            unit="млрд ₽",
+                        )
+                    else:
+                        st.info("Выбери хотя бы один показатель.")
+
+                    last_values = []
+                    for key, label in available_credit.items():
+                        observed = credit_data[["date", key]].dropna(
+                            subset=[key]
+                        ).sort_values("date")
+                        if observed.empty:
+                            continue
+                        last = observed.iloc[-1]
+                        last_values.append({
+                            "Показатель": label,
+                            "Отчётная дата": last["date"].strftime("%d.%m.%Y"),
+                            "Задолженность, млрд ₽": round(float(last[key]), 3),
+                        })
+
+                    if last_values:
+                        st.subheader("Последние опубликованные значения")
+                        st.dataframe(
+                            pd.DataFrame(last_values),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+
+            st.caption(
+                "Источник: Банк России, раздел статистики банковского "
+                "сектора. Физлица — все кредиты резидентам; "
+                "компании — юридические лица-резиденты и ИП; "
+                "МСП — отдельная пересекающаяся категория. "
+                "Показатели нельзя суммировать между собой."
+            )
+
         with other_tab:
             st.subheader(
                 "Дополнительные показатели России"
@@ -1249,7 +1343,6 @@ if active_country is not None:
             st.markdown(
                 """
                 **Банковский сектор**
-                - Кредитование физлиц, компаний и МСП
                 - Денежная масса: M0, M1, M2 и широкая
                 - Ипотечное кредитование
 

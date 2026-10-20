@@ -1,4 +1,3 @@
-
 """
 Планировщик обновления данных.
 
@@ -65,6 +64,7 @@ from src.cleanup import cleanup_all, ensure_dirs
 from src.fetch_china_debt_fred import fetch_china_debt_fred
 from src.fetch_russia import fetch_russia_cpi, fetch_russia_quarterly
 from src.Russia.rates import fetch_russia_rates
+from src.Russia.credit import fetch_russia_credit
 
 from src.storage import (
     save_fred, save_rss, save_forexfactory, save_imf,
@@ -93,7 +93,7 @@ from src.storage import (
     save_us_quarterly,
     save_us_annual_bea,
     save_bloomberg, save_china_debt_fred,
-    save_russia_cpi, save_russia_quarterly, save_russia_rates,
+    save_russia_cpi, save_russia_quarterly, save_russia_rates, save_russia_credit,
 )
 
 
@@ -196,6 +196,11 @@ GROUPS = {
             "по кредитам и депозитам (ЦБ РФ)",
             fetch_russia_rates,
             save_russia_rates,
+        ),
+        (
+            "Россия: задолженность физлиц, компаний и МСП (ЦБ РФ)",
+            fetch_russia_credit,
+            save_russia_credit,
         ),
     ],
     "fred": [

@@ -1,4 +1,3 @@
-
 import sqlite3
 import pandas as pd
 from config import DB_PATH
@@ -53,7 +52,7 @@ def clear_all():
         "japan_cpi", "korea_cpi", "korea_quarterly",
         "us_quarterly", "us_annual_bea",
         "japan_quarterly",
-        "russia_cpi", "russia_quarterly", "russia_rates",
+        "russia_cpi", "russia_quarterly", "russia_rates", "russia_credit",
         "policy_rates", "bloomberg",
     ):
         clear_table(t)
@@ -110,6 +109,7 @@ STANDARD_TABLES = {
     "us_annual_bea": "date",
     "japan_quarterly": "date",
     "russia_rates": "date",
+    "russia_credit": "date",
     "policy_rates": "date",
     "bloomberg": "date",
 }
