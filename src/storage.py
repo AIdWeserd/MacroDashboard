@@ -52,7 +52,7 @@ def clear_all():
         "japan_cpi", "korea_cpi", "korea_quarterly",
         "us_quarterly", "us_annual_bea",
         "japan_quarterly",
-        "russia_cpi", "russia_quarterly", "russia_rates", "russia_credit",
+        "russia_cpi", "russia_quarterly", "russia_rates", "russia_credit", "russia_mortgage", "russia_money", "russia_trade", "russia_trade_estimates", "russia_investors",
         "policy_rates", "bloomberg",
     ):
         clear_table(t)
@@ -110,6 +110,11 @@ STANDARD_TABLES = {
     "japan_quarterly": "date",
     "russia_rates": "date",
     "russia_credit": "date",
+    "russia_mortgage": "date",
+    "russia_money": "date",
+    "russia_trade": "date",
+    "russia_trade_estimates": "date",
+    "russia_investors": "date",
     "policy_rates": "date",
     "bloomberg": "date",
 }

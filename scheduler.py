@@ -65,6 +65,10 @@ from src.fetch_china_debt_fred import fetch_china_debt_fred
 from src.fetch_russia import fetch_russia_cpi, fetch_russia_quarterly
 from src.Russia.rates import fetch_russia_rates
 from src.Russia.credit import fetch_russia_credit
+from src.Russia.mortgage import fetch_russia_mortgage
+from src.Russia.money import fetch_russia_money
+from src.Russia.trade import fetch_russia_trade, fetch_russia_trade_estimates
+from src.Russia.investors import fetch_russia_investors
 
 from src.storage import (
     save_fred, save_rss, save_forexfactory, save_imf,
@@ -93,7 +97,9 @@ from src.storage import (
     save_us_quarterly,
     save_us_annual_bea,
     save_bloomberg, save_china_debt_fred,
-    save_russia_cpi, save_russia_quarterly, save_russia_rates, save_russia_credit,
+    save_russia_cpi, save_russia_quarterly, save_russia_rates,
+    save_russia_credit, save_russia_mortgage, save_russia_money,
+    save_russia_trade, save_russia_trade_estimates, save_russia_investors,
 )
 
 
@@ -201,6 +207,31 @@ GROUPS = {
             "Россия: задолженность физлиц, компаний и МСП (ЦБ РФ)",
             fetch_russia_credit,
             save_russia_credit,
+        ),
+        (
+            "Россия: ипотечные показатели (ЦБ РФ)",
+            fetch_russia_mortgage,
+            save_russia_mortgage,
+        ),
+        (
+            "Россия: денежная масса M0, M1, M2, M2X (ЦБ РФ)",
+            fetch_russia_money,
+            save_russia_money,
+        ),
+        (
+            "Россия: экспорт, импорт и торговое сальдо (ЦБ РФ)",
+            fetch_russia_trade,
+            save_russia_trade,
+        ),
+        (
+            "Россия: оперативные оценки экспорта/импорта (ЦБ РФ)",
+            fetch_russia_trade_estimates,
+            save_russia_trade_estimates,
+        ),
+        (
+            "Россия: частные инвесторы (официальные релизы Московской биржи)",
+            fetch_russia_investors,
+            save_russia_investors,
         ),
     ],
     "fred": [

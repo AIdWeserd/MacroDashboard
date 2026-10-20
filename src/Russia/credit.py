@@ -71,7 +71,7 @@ def _load_credit_series(name: str, source: dict) -> pd.DataFrame:
         name: values.to_numpy(),
     }).dropna(subset=["date", name])
 
-    result = result.loc[result["date"] >= "2024-01-01"].copy()
+    result = result.loc[result["date"] >= "2020-01-01"].copy()
     result[name] = result[name] / 1000.0  # млн руб. -> млрд руб.
     result = result.sort_values("date").reset_index(drop=True)
     if result.empty or result["date"].duplicated().any():
