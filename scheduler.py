@@ -69,6 +69,7 @@ from src.Russia.mortgage import fetch_russia_mortgage
 from src.Russia.money import fetch_russia_money
 from src.Russia.trade import fetch_russia_trade, fetch_russia_trade_estimates
 from src.Russia.investors import fetch_russia_investors
+from src.Russia.cbr_reference import fetch_russia_cbr_reference
 
 from src.storage import (
     save_fred, save_rss, save_forexfactory, save_imf,
@@ -100,6 +101,7 @@ from src.storage import (
     save_russia_cpi, save_russia_quarterly, save_russia_rates,
     save_russia_credit, save_russia_mortgage, save_russia_money,
     save_russia_trade, save_russia_trade_estimates, save_russia_investors,
+    save_russia_cbr_reference,
 )
 
 
@@ -232,6 +234,11 @@ GROUPS = {
             "Россия: частные инвесторы (официальные релизы Московской биржи)",
             fetch_russia_investors,
             save_russia_investors,
+        ),
+        (
+            "Россия: статистика брокеров, ИИС и ПИФ (ЦБ РФ)",
+            fetch_russia_cbr_reference,
+            save_russia_cbr_reference,
         ),
     ],
     "fred": [

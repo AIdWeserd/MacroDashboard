@@ -712,6 +712,7 @@ from src.storage import (
     load_russia_quarterly,
     load_russia_credit,
     load_russia_mortgage,
+    load_russia_cbr_reference,
     load_russia_money,
     load_russia_trade,
     load_russia_trade_estimates,
@@ -1019,6 +1020,7 @@ if active_country is not None:
             money_tab,
             trade_tab,
             investors_tab,
+            reference_tab,
             other_tab,
         ) = st.tabs([
             "Ставки",
@@ -1031,6 +1033,7 @@ if active_country is not None:
             "Денежная масса",
             "Внешняя торговля",
             "Частные инвесторы",
+            "Статистика ЦБ РФ",
             "Другие показатели",
         ])
 
@@ -1779,6 +1782,14 @@ if active_country is not None:
                 investors = investors.dropna(subset=["date"]).sort_values("date")
                 investors = investors.loc[investors["date"] >= pd.Timestamp("2024-01-01")]
                 investors = investors.drop_duplicates(subset=["date"], keep="last")
+                # Руководитель запросил только точные значения.
+                # Приблизительные формулировки MOEX скрываем и не экспортируем.
+                for metric_key in investor_metrics:
+                    qualifier_key = metric_key + "_qualifier"
+                    if qualifier_key in investors.columns and metric_key in investors.columns:
+                        approximated = investors[qualifier_key].fillna("").astype(str).str.strip().ne("")
+                        investors.loc[approximated, metric_key] = float("nan")
+
 
                 def _latest_investor_value(key):
                     if key not in investors.columns:
@@ -1794,7 +1805,13 @@ if active_country is not None:
                         return "—", "Нет опубликованных значений"
                     label, unit = investor_metrics[key]
                     value = float(last[key])
-                    return (f"{value:,.2f}".replace(",", " ").replace(".", ",")
+                    qualifier_col = key + "_qualifier"
+                    qualifier = ""
+                    if qualifier_col in investors.columns:
+                        hit = investors.loc[investors["date"] == last["date"]]
+                        if not hit.empty and pd.notna(hit.iloc[-1][qualifier_col]):
+                            qualifier = str(hit.iloc[-1][qualifier_col]) + " "
+                    return (qualifier + f"{value:,.2f}".replace(",", " ").replace(".", ",")
                             + " " + unit, last["date"].strftime("%m.%Y"))
 
                 # KPI-карточки: разные показатели могут иметь разные последние месяцы.
@@ -1873,11 +1890,20 @@ if active_country is not None:
                         values = shown[["date", key]].dropna(subset=[key]).sort_values("date")
                         if values.empty:
                             continue
+                        qualifier_col = key + "_qualifier"
+                        if qualifier_col in shown.columns:
+                            values = shown[["date", key, qualifier_col]].dropna(subset=[key]).sort_values("date")
+                            notes = values[qualifier_col].fillna("").astype(str)
+                        else:
+                            notes = pd.Series([""] * len(values), index=values.index)
+                        symbols = ["diamond" if note else "circle" for note in notes]
+                        hover_notes = [((note + " (оценка): ") if note else "") for note in notes]
                         fig.add_trace(go.Scatter(
                             x=values["date"], y=values[key], mode="lines+markers",
                             name=investor_metrics[key][0], connectgaps=False,
-                            line={"width": 2}, marker={"size": 5},
-                            hovertemplate="%{x|%m.%Y}: %{y:,.2f} " + unit + "<extra>%{fullData.name}</extra>",
+                            line={"width": 2}, marker={"size": 7, "symbol": symbols},
+                            customdata=hover_notes,
+                            hovertemplate="%{x|%m.%Y}: %{customdata}%{y:,.2f} " + unit + "<extra>%{fullData.name}</extra>",
                         ))
                     fig.update_layout(
                         title=title, xaxis_title="Отчётный месяц", yaxis_title=unit,
@@ -1940,6 +1966,7 @@ if active_country is not None:
                     keys = _choose_investor_metrics("persons", [
                         "active_investors_mln", "brokerage_clients_mln"])
                     _investor_plot(keys, "Частные инвесторы Московской биржи", "млн человек")
+                    st.caption("Показаны только точные опубликованные значения; приблизительные оценки исключены.")
 
                 with turnover_tab:
                     st.markdown("#### Доля физлиц в торговом обороте")
@@ -1968,6 +1995,11 @@ if active_country is not None:
                         "Показатель": label,
                         "Период": row["date"].strftime("%m.%Y"),
                         "Значение": round(float(row[key]), 3),
+                        "Точность": (
+                            str(source_rows.iloc[-1].get(key + "_qualifier"))
+                            if not source_rows.empty and pd.notna(source_rows.iloc[-1].get(key + "_qualifier"))
+                            else "точное"
+                        ),
                         "Единица": unit,
                         "Источник": source_url if isinstance(source_url, str) else "",
                     })
@@ -1979,7 +2011,8 @@ if active_country is not None:
                     )
                 export_columns = ["date"] + [
                     key for key in investor_metrics if key in shown.columns
-                ] + [key for key in ("source_url", "publication_date") if key in shown.columns]
+                ] + [key for key in ("active_investors_mln_qualifier", "brokerage_clients_mln_qualifier",
+                                      "source_url", "publication_date") if key in shown.columns]
                 export = shown[export_columns].copy()
                 export["date"] = export["date"].dt.strftime("%Y-%m")
                 st.download_button(
@@ -1996,9 +2029,9 @@ if active_country is not None:
                     )
                     observed = set(investors["date"].dt.to_period("M"))
                     missing = [d.strftime("%m.%Y") for d in expected if d.to_period("M") not in observed]
-                    st.write(f"Периодов без подтверждённых значений: {len(missing)}")
+                    st.write(f"Периодов без подтверждённой публикации: {len(missing)}")
                     if missing:
-                        st.caption("Месяцы без подтверждённых значений: " + ", ".join(missing))
+                        st.caption("Месяцы без публикаций: " + ", ".join(missing))
                     for key, (label, _) in investor_metrics.items():
                         count = int(investors[key].notna().sum()) if key in investors else 0
                         st.caption(f"{label}: {count} подтверждённых наблюдений")
@@ -2007,6 +2040,72 @@ if active_country is not None:
                         "Разные показатели могут иметь разные последние месяцы. "
                         "Даты относятся к отчётным периодам, а не к датам публикаций."
                     )
+
+        with reference_tab:
+            st.subheader("Статистика ЦБ РФ — справочные показатели")
+            st.caption(
+                "Только опубликованные точные уровни; без графиков и самостоятельных расчётов. "
+                "Брокеры и ИИС — квартальные данные, ПИФ — месячные данные. "
+                "Периоды в таблицах — отчётные, не даты публикаций."
+            )
+            reference = load_russia_cbr_reference()
+            expected = {
+                "Брокеры и ПУРЦБ": [
+                    ("Средний размер портфеля физлица-резидента", "broker_average_portfolio"),
+                    ("Активы клиентов на брокерских счетах", "broker_assets"),
+                    ("Нетто-взносы физлиц на брокерские счета", "broker_net_contributions"),
+                    ("Количество клиентов на брокерском обслуживании", "broker_clients"),
+                    ("Количество ПУРЦБ", "purcb_count"),
+                ],
+                "ИИС": [
+                    ("Количество ИИС", "iis_count"),
+                    ("Активы ИИС", "iis_assets"),
+                    ("Средний размер ИИС", "iis_average"),
+                    ("Закрытые ИИС за квартал", "iis_closed"),
+                    ("Нетто-взносы на ИИС", "iis_net_contributions"),
+                ],
+                "Коллективные инвестиции": [
+                    ("Количество зарегистрированных ПИФ", "pif_count"),
+                    ("Выдача инвестиционных паёв", "pif_issued"),
+                    ("СЧА ПИФ", "pif_nav"),
+                    ("Погашение инвестиционных паёв", "pif_redeemed"),
+                ],
+            }
+            sections = st.tabs(list(expected))
+            for tab, (section, requested) in zip(sections, expected.items()):
+                with tab:
+                    rows = []
+                    for title, metric in requested:
+                        subset = pd.DataFrame()
+                        if not reference.empty and metric is not None:
+                            subset = reference.loc[reference["metric"] == metric].sort_values("date")
+                        if subset.empty:
+                            rows.append({"Показатель": title, "Значение": "—",
+                                         "Ед. изм.": "—", "Отчётный период": "—",
+                                         "Статус": "Источник точного готового ряда пока не подтверждён",
+                                         "Источник ЦБ": "—"})
+                        else:
+                            last = subset.iloc[-1]
+                            number = float(last["value"])
+                            display = (f"{int(number):,}" if number.is_integer()
+                                       else f"{number:,.3f}".rstrip("0").rstrip("."))
+                            display = display.replace(",", " ")
+                            rows.append({"Показатель": title, "Значение": display,
+                                         "Ед. изм.": str(last["unit"]),
+                                         "Отчётный период": pd.Timestamp(last["date"]).strftime("%d.%m.%Y"),
+                                         "Статус": ("Опубликован ЦБ (архивный отчёт)"
+                                                    if last["source_row"] == -1
+                                                    else "Опубликован ЦБ"),
+                                         "Источник ЦБ": str(last["source_url"])})
+                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                    st.caption("Пустые карточки не рассчитываются из других рядов. "
+                               "Архивные значения указываются с собственным отчётным периодом, "
+                               "а не с датой последней публикации другого показателя. "
+                               "Средний брокерский портфель — без небольших счетов; "
+                               "средний ИИС — только брокерские ИИС. "
+                               "Погашение паёв показано положительным опубликованным объёмом.")
+            if reference.empty:
+                st.info("Чтобы загрузить справочные показатели: python scheduler.py ru")
 
         with other_tab:
             st.subheader("Идеи для дальнейшего развития")

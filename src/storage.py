@@ -115,6 +115,7 @@ STANDARD_TABLES = {
     "russia_trade": "date",
     "russia_trade_estimates": "date",
     "russia_investors": "date",
+    "russia_cbr_reference": "date",
     "policy_rates": "date",
     "bloomberg": "date",
 }
