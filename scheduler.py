@@ -5,12 +5,15 @@
     python scheduler.py            — обновить всё
     python scheduler.py ru         — обновить Россию
     python scheduler.py china      — обновить выбранную группу
+    python scheduler.py ru_reference — только брокеры, ИИС, ПИФ (ЦБ РФ)
+    python scheduler.py ru_ruonia  — только дневной объем сделок RUONIA
     python scheduler.py --list     — показать список групп
     python scheduler.py --help     — справка
+    python scheduler.py --dry-run ru — показать план без скачивания и записи
 """
 
 import sys
-import traceback
+import re
 
 from src.fetch_fred import fetch_all_macro
 from src.fetch_fred_unemployment import fetch_fred_unemployment
@@ -70,6 +73,7 @@ from src.Russia.money import fetch_russia_money
 from src.Russia.trade import fetch_russia_trade, fetch_russia_trade_estimates
 from src.Russia.investors import fetch_russia_investors
 from src.Russia.cbr_reference import fetch_russia_cbr_reference
+from src.Russia.ruonia import fetch_russia_ruonia
 
 from src.storage import (
     save_fred, save_rss, save_forexfactory, save_imf,
@@ -101,25 +105,45 @@ from src.storage import (
     save_russia_cpi, save_russia_quarterly, save_russia_rates,
     save_russia_credit, save_russia_mortgage, save_russia_money,
     save_russia_trade, save_russia_trade_estimates, save_russia_investors,
-    save_russia_cbr_reference,
+    save_russia_cbr_reference, save_russia_ruonia,
 )
 
 
-def _step(name: str, fetch_fn, save_fn):
-    """Выполняет один шаг обновления: fetch -> save."""
-    print(f"\n--- {name} ---")
+def _safe_error(exc: Exception) -> str:
+    """Не выводим значения типичных URL-параметров с секретами в лог."""
+    message = str(exc)
+    # Исключения requests могут включать полный URL с API-ключом.
+    message = re.sub(
+        r"(?i)([?&\s](?:api[_-]?key|apikey|access[_-]?token|"
+        r"auth[_-]?token|token|client[_-]?secret|password|secret|key)\s*[:=]\s*)"
+        r"[^&\s,;]+",
+        r"\1[REDACTED]",
+        message,
+    )
+    return f"{type(exc).__name__}: {message}"
 
+
+def _step(name: str, fetch_fn, save_fn) -> str:
+    """Один шаг: ok / empty / partial / error; другие шаги продолжаются."""
+    print(f"\n--- {name} ---")
     try:
         df = fetch_fn()
-
-        if df is not None and not df.empty:
-            save_fn(df)
-        else:
-            print(f"[WARN] {name}: нет данных")
-
-    except Exception as e:
-        print(f"[ERROR] {name}: {e}")
-        traceback.print_exc()
+        if df is None or df.empty:
+            print(f"[WARN] {name}: источник не вернул данных; сохранение пропущено")
+            return "empty"
+        source_issues = tuple(df.attrs.get("source_issues", ()))
+        save_fn(df)
+        if source_issues:
+            # Успешные страны сохранены, но общий шаг не является успешным.
+            print(f"[WARN] {name}: частичная загрузка; проблемы: "
+                  + ", ".join(map(str, source_issues)))
+            return "partial"
+        print(f"[OK] {name}: загрузка и сохранение завершены")
+        return "ok"
+    except Exception as exc:
+        # Не печатаем полный traceback: HTTP-исключения могут содержать API-ключи.
+        print(f"[ERROR] {name}: {_safe_error(exc)}")
+        return "error"
 
 
 GROUPS = {
@@ -240,6 +264,11 @@ GROUPS = {
             fetch_russia_cbr_reference,
             save_russia_cbr_reference,
         ),
+        (
+            "Россия: объем сделок RUONIA (ЦБ РФ, дневной ряд)",
+            fetch_russia_ruonia,
+            save_russia_ruonia,
+        ),
     ],
     "fred": [
         ("FRED: макро-ряды", fetch_all_macro, save_fred),
@@ -261,6 +290,28 @@ GROUPS = {
         ("RSS: новости", fetch_news, save_rss),
     ],
 }
+
+# Узкие группы ссылаются на те же шаги, что и полная группа ru.
+# Поэтому логика получения и сохранения данных остаётся единой.
+RU_REFERENCE_GROUP = "ru_reference"
+RU_RUONIA_GROUP = "ru_ruonia"
+SELECTIVE_RU_GROUPS = {RU_REFERENCE_GROUP, RU_RUONIA_GROUP}
+
+GROUPS[RU_REFERENCE_GROUP] = [
+    step for step in GROUPS["ru"]
+    if step[1] is fetch_russia_cbr_reference
+]
+GROUPS[RU_RUONIA_GROUP] = [
+    step for step in GROUPS["ru"]
+    if step[1] is fetch_russia_ruonia
+]
+
+# Защита от повторной загрузки при запуске без аргументов:
+# `ru` уже включает оба этих загрузчика.
+DEFAULT_GROUPS = tuple(
+    group for group in GROUPS
+    if group not in SELECTIVE_RU_GROUPS
+)
 
 
 def print_help():
@@ -285,64 +336,103 @@ def print_list():
         print()
 
 
-def run(groups: list[str] | None = None):
-    print("=" * 50)
-    print("ОБНОВЛЕНИЕ ДАННЫХ")
-    print("=" * 50)
+def run(groups: list[str] | None = None, *, dry_run: bool = False) -> int:
+    """Обновляет группы; возвращает код завершения для Windows Task Scheduler.
 
-    ensure_dirs()
-
-    if groups is None:
-        selected = list(GROUPS.keys())
-    else:
-        selected = groups
-
-    unknown = [
-        group
-        for group in selected
-        if group not in GROUPS
-    ]
-
-    if unknown:
-        print(f"[ERROR] Неизвестные группы: {unknown}")
+    0 — всё успешно, 1 — неполное обновление, 2 — ошибка.
+    Каждая таблица сохраняется собственной транзакцией storage.py;
+    общей транзакции на весь запуск scheduler здесь нет.
+    """
+    selected = list(DEFAULT_GROUPS) if groups is None else list(groups)
+    unknown = [group for group in selected if group not in GROUPS]
+    if unknown or not selected:
+        print(f"[ERROR] Неверные группы: {unknown or selected}")
         print_help()
-        sys.exit(1)
+        return 2
 
+    print("=" * 50)
+    print("ПЛАН ОБНОВЛЕНИЯ" if dry_run else "ОБНОВЛЕНИЕ ДАННЫХ")
+    print("=" * 50)
+
+    # Проверяем план до любых файловых и сетевых операций.
+    plan = []
+    seen = set()
     for group in selected:
-        print(f"\n{'=' * 50}")
-        print(f"ГРУППА: {group}")
-        print("=" * 50)
-
         for name, fetch_fn, save_fn in GROUPS[group]:
-            _step(name, fetch_fn, save_fn)
+            key = (fetch_fn, save_fn)
+            if key in seen:
+                continue
+            seen.add(key)
+            plan.append((group, name, fetch_fn, save_fn))
 
-    if groups is None:
+    if dry_run:
+        for idx, (group, name, _, _) in enumerate(plan, 1):
+            print(f"{idx:02d}. [{group}] {name}")
+        print(f"[DRY RUN] Шагов: {len(plan)}; запросов и записей не было")
+        return 0
+
+    try:
+        ensure_dirs()
+    except Exception as exc:
+        print(f"[ERROR] Не удалось подготовить папки: {_safe_error(exc)}")
+        return 2
+
+    stats = {"ok": 0, "empty": 0, "partial": 0, "error": 0}
+    problems = []
+    for group, name, fetch_fn, save_fn in plan:
+        print(f"\n[GROUP] {group}")
+        status = _step(name, fetch_fn, save_fn)
+        if status not in stats:
+            status = "error"
+            print(f"[ERROR] {name}: неопределённый результат шага")
+        stats[status] += 1
+        if status != "ok":
+            problems.append((status, name))
+
+    # Снимок строится только после полностью успешного общего обновления.
+    if groups is None and not problems:
         print("\n--- Снимок сводной таблицы ---")
-
         try:
             save_weekly_snapshot()
+            print("[OK] Снимок сохранён")
+        except Exception as exc:
+            print(f"[ERROR] snapshot: {_safe_error(exc)}")
+            problems.append(("error", "snapshot"))
+            stats["error"] += 1
 
-        except Exception as e:
-            print(f"[ERROR] snapshot: {e}")
-
-    cleanup_all()
+    # Очистку старых выгрузок выполняем только после полного успешного
+    # обновления без аргументов. Частичные/выборочные запуски не удаляют файлы.
+    if groups is None and not problems:
+        try:
+            cleanup_all()
+        except Exception as exc:
+            print(f"[ERROR] cleanup: {_safe_error(exc)}")
+            problems.append(("error", "cleanup"))
+            stats["error"] += 1
 
     print("\n" + "=" * 50)
-    print("ГОТОВО")
-    print("=" * 50)
+    print(f"[SUMMARY] Успешно: {stats['ok']}; пустых: {stats['empty']}; "
+          f"частичных: {stats['partial']}; ошибок: {stats['error']}")
+    for status, name in problems:
+        print(f"[{status.upper()}] {name}")
+
+    if stats["error"]:
+        print("[FINISH] ОБНОВЛЕНИЕ С ОШИБКАМИ (код 2)")
+        return 2
+    if stats["empty"] or stats["partial"]:
+        print("[FINISH] НЕПОЛНОЕ ОБНОВЛЕНИЕ (код 1)")
+        return 1
+    print("[FINISH] ГОТОВО (код 0)")
+    return 0
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-
-    if not args:
-        run()
-
-    elif args[0] in ("--help", "-h"):
+    if args and args[0] in ("--help", "-h"):
         print_help()
-
-    elif args[0] == "--list":
+    elif args and args[0] == "--list":
         print_list()
-
     else:
-        run(groups=args)
+        dry_run = "--dry-run" in args
+        groups = [arg for arg in args if arg != "--dry-run"]
+        sys.exit(run(groups=groups or None, dry_run=dry_run))

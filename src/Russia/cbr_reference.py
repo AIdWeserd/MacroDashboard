@@ -187,6 +187,17 @@ def fetch_russia_cbr_reference():
         })
     print(f'[RU REFERENCE] Исторические официальные публикации: {len(OFFICIAL_PUBLICATIONS)} точных показателей')
 
+    # АВТОМАТИЧЕСКИЙ ПОИСК НОВЫХ ВЫПУСКОВ ЦБ:
+    # - обзоры брокеров (PDF),
+    # - обзоры ИИС (HTML),
+    # - статистические бюллетени, таблица 4.5.4 (PDF).
+    # Вновь опубликованные точные значения перекрывают резервные строки
+    # только для того же показателя и того же отчетного периода.
+    from src.Russia.publications_auto import fetch_official_publications
+    automatic_publications = fetch_official_publications()
+    print(f'[RU REFERENCE] Из новых публикаций: {len(automatic_publications)} наблюдений')
+    records.extend(automatic_publications)
+
     # Load old SQLite rows BEFORE scheduler calls save(... if_exists="replace").
     from src.storage import load_russia_cbr_reference
     previous = load_russia_cbr_reference()

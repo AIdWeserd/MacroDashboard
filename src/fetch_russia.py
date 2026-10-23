@@ -485,34 +485,8 @@ def _validate(df, issue_period):
                 f"Пропуски показателя {column}"
             )
 
-    # Контроль по уже проверенному выпуску.
-    if cutoff >= pd.Timestamp("2026-09-30"):
-        sep = df.loc[
-            df["date"] == pd.Timestamp("2026-09-30")
-        ]
-
-        if len(sep) != 1:
-            raise ValueError(
-                "Отсутствует сентябрь 2026"
-            )
-
-        row = sep.iloc[0]
-
-        expected = {
-            "value": 6.35,
-            "mom": 0.35,
-            "core": 5.47,
-        }
-
-        for column, expected_value in expected.items():
-            if abs(
-                float(row[column]) - expected_value
-            ) > 0.001:
-                raise ValueError(
-                    f"Контроль {column}: "
-                    f"{row[column]}, "
-                    f"ожидалось {expected_value}"
-                )
+    # Validate coverage and numeric fields; never pin release values to
+    # a historical month (official source values can be revised).
 
     return df.reset_index(drop=True)
 
@@ -529,7 +503,7 @@ def fetch_russia_cpi():
     for pdf_url in pdf_urls:
         period = _pdf_period(pdf_url)
 
-        if period is None or period < (2026, 9):
+        if period is None:
             continue
 
         print(
@@ -643,6 +617,12 @@ def _ru_download(url, params=None):
             result.raise_for_status()
             return result.content
 
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code in (404, 410):
+                raise
+            last_error = exc
+            if attempt < 3:
+                time.sleep(2 * (attempt + 1))
         except requests.RequestException as exc:
             last_error = exc
 
@@ -669,8 +649,43 @@ def _ru_excel(url, sheet):
     )
 
 
+def _ru_rosstat_book(kind, sheet):
+    """Fetch newest available official workbook; keep original link as backup.
+
+    The filename convention may change: in that case a previously checked
+    workbook is used and a warning is shown. No imaginary years are filled.
+    """
+    year = pd.Timestamp.now().year
+    if kind == "quarter":
+        names = [f"VVP_kvartal_s-1995-{y}.xlsx" for y in range(year, 2025, -1)]
+        original = RU_GDP_URL
+    elif kind == "annual":
+        names = [f"VVP_god_s1995-{y}.xlsx" for y in range(year - 1, 2024, -1)]
+        original = "https://rosstat.gov.ru/storage/mediabank/VVP_god_s1995-2025.xlsx"
+    else:
+        raise ValueError(kind)
+
+    urls = list(dict.fromkeys([
+        *("https://rosstat.gov.ru/storage/mediabank/" + name for name in names),
+        original,
+    ]))
+    issues = []
+    for url in urls:
+        try:
+            return _ru_excel(url, sheet)
+        except (requests.RequestException, ValueError, RuntimeError, KeyError) as exc:
+            issues.append(f"{url}: {str(exc)[:180]}")
+    raise RuntimeError("RU Росстат: ни один файл не доступен: " + "; ".join(issues))
+
+
+def _ru_last_complete_quarter():
+    """Last elapsed calendar quarter; never current unfinished quarter."""
+    now = pd.Timestamp.now()
+    return pd.Period(now, freq="Q") - 1
+
+
 def _ru_nominal_gdp():
-    frame = _ru_excel(RU_GDP_URL, "2")
+    frame = _ru_rosstat_book("quarter", "2")
 
     values = {}
     year = None
@@ -720,20 +735,54 @@ def _ru_nominal_gdp():
     return values
 
 
+def _ru_gfs_candidates(year, last_quarter):
+    """Prior verified report plus convention-based official follow-ups.
+
+    Unlike the fixed 2024–26 dictionary, future years are generated at run
+    time. If Roskazna changes its path/naming, that year's data stay absent;
+    existing history and IMF fallback remain intact.
+    """
+    current = last_quarter.year
+    quarters = 4 if year < current else (last_quarter.quarter if year == current else 0)
+    candidates = []
+    verified_url = RU_GFS_URLS.get(year)
+    verified_q = 0
+    if verified_url:
+        match = re.search(r"GFS\s+(\d)q\d{4}", verified_url, re.I)
+        verified_q = int(match.group(1)) if match else 0
+    # For a completed official full year, do not probe needless filenames.
+    if verified_url and verified_q >= quarters:
+        candidates.append(verified_url)
+    if quarters:
+        for quarter in range(quarters, 0, -1):
+            for suffix in ("_IMF", "_с", ""):
+                candidates.append(
+                    f"https://roskazna.gov.ru/storage/page-files/39/"
+                    f"GFS {quarter}q{year}{suffix}.xlsx"
+                )
+    if year in RU_GFS_URLS:
+        candidates.append(RU_GFS_URLS[year])
+    return list(dict.fromkeys(candidates))
+
+
 def _ru_gfs_data():
     nlb = {}
     debt = {}
+    last_quarter = _ru_last_complete_quarter()
 
-    for year, url in RU_GFS_URLS.items():
-        ops = _ru_excel(
-            url,
-            "Stmt of Govt Operations",
-        )
-
-        bal = _ru_excel(
-            url,
-            "Balance Sheet",
-        )
+    for year in range(2024, last_quarter.year + 1):
+        ops = bal = None
+        for url in _ru_gfs_candidates(year, last_quarter):
+            try:
+                ops = _ru_excel(url, "Stmt of Govt Operations")
+                bal = _ru_excel(url, "Balance Sheet")
+                print(f"[RU] GFS {year}: {url.rsplit('/', 1)[-1]}")
+                break
+            except (requests.RequestException, ValueError, RuntimeError, KeyError) as exc:
+                continue
+        if ops is None or bal is None:
+            print(f"[WARN] RU GFS {year}: нет опубликованной подходящей книги; история сохранится")
+            continue
 
         def code_row(frame, code):
             hits = [
@@ -756,7 +805,9 @@ def _ru_gfs_data():
         debt_row = code_row(bal, "63")
 
         for q in range(1, 5):
-            if (year, q) > (2026, 2):
+            if pd.Period(f"{year}Q{q}", freq="Q") > last_quarter:
+                continue
+            if q + 3 >= min(ops.shape[1], bal.shape[1]):
                 continue
 
             key = f"{year}Q{q}"
@@ -811,10 +862,9 @@ def _ru_current_account():
         quarter = int(match.group(1))
         year = int(match.group(2))
 
-        if (
-            (year, quarter) < (2024, 1)
-            or (year, quarter) > (2026, 2)
-        ):
+        if (year, quarter) < (2024, 1):
+            continue
+        if pd.Period(f"{year}Q{quarter}", freq="Q") > _ru_last_complete_quarter():
             continue
 
         amount = pd.to_numeric(
@@ -832,9 +882,10 @@ def _ru_current_account():
 
 
 def _ru_fx_quarterly():
+    end = _ru_last_complete_quarter().end_time.normalize()
     payload = {
         "date_req1": "20/12/2023",
-        "date_req2": "30/06/2026",
+        "date_req2": end.strftime("%d/%m/%Y"),
         "VAL_NM_RQ": "R01235",
     }
 
@@ -881,7 +932,7 @@ def _ru_fx_quarterly():
 
     days = pd.date_range(
         "2024-01-01",
-        "2026-06-30",
+        end,
         freq="D",
     )
 
@@ -945,9 +996,10 @@ def fetch_russia_quarterly():
 
     results = []
 
+    last_quarter = _ru_last_complete_quarter()
     for period in pd.period_range(
         "2024Q1",
-        "2026Q2",
+        last_quarter,
         freq="Q",
     ):
         key = str(period)
@@ -1005,6 +1057,9 @@ def fetch_russia_quarterly():
                 / (10 * g)
             )
 
+        if not any(value is not None for value in (debt_gdp, budget_gdp, trade_gdp)):
+            continue
+
         results.append({
             "date": period.end_time.normalize(),
             "country": "RU",
@@ -1015,15 +1070,13 @@ def fetch_russia_quarterly():
 
     result = pd.DataFrame(results)
 
-    for col in (
-        "debt_gdp",
-        "budget_gdp",
-        "trade_gdp",
-    ):
-        if result[col].isna().any():
-            raise ValueError(
-                f"RU {col}: есть пропущенные кварталы"
-            )
+    if result.empty:
+        raise ValueError(
+            "RU: нет ни одного завершённого квартала с данными. "
+            "Проверь публикации GFS и Росстата."
+        )
+    # Incomplete newly-published periods are expected: no invented data.
+    # src.storage merges only non-null updates and preserves old values.
 
     print(
         "[RU] Финансовые показатели:",
@@ -1042,7 +1095,12 @@ def fetch_russia_quarterly():
     ):
         result[column] = float("nan")
 
-    for year in (2024, 2025):
+    completed_years = sorted({
+        int(k[:4]) for k in gdp if k.endswith("Q4")
+        and int(k[:4]) < pd.Timestamp.now().year
+    })
+    populated_annual_years = []
+    for year in completed_years:
         keys = [
             f"{year}Q{q}"
             for q in range(1, 5)
@@ -1057,9 +1115,8 @@ def fetch_russia_quarterly():
         )
 
         if any(x is None for x in required):
-            raise ValueError(
-                f"RU {year}: неполные годовые данные"
-            )
+            print(f"[WARN] RU {year}: неполные годовые исходные ряды; используем IMF fallback")
+            continue
 
         annual_gdp = sum(gdp[k] for k in keys)
         annual_budget = sum(nlb[k] for k in keys)
@@ -1080,9 +1137,7 @@ def fetch_russia_quarterly():
         )
 
         if mask.sum() != 1:
-            raise ValueError(
-                f"RU {year}: строка Q4 не найдена"
-            )
+            continue
 
         result.loc[
             mask, "annual_debt_gdp"
@@ -1101,8 +1156,9 @@ def fetch_russia_quarterly():
         ] = (
             annual_ca_rub_bln / annual_gdp * 100
         )
+        populated_annual_years.append(year)
 
-    print("[RU] Годовые показатели: 2024, 2025")
+    print("[RU] Годовые финансовые показатели:", populated_annual_years)
 
     # --------------------------------------------------------
     # Рост ВВП YoY — Росстат
@@ -1111,10 +1167,7 @@ def fetch_russia_quarterly():
     # Единственное разрешённое исключение:
     # официальный индекс физического объёма минус 100.
 
-    gdp_frame = _ru_excel(
-        RU_GDP_URL,
-        "12",
-    )
+    gdp_frame = _ru_rosstat_book("quarter", "12")
 
     gdp_growth = {}
     source_year = None
@@ -1295,14 +1348,7 @@ def fetch_russia_quarterly():
     # Годовой ВВП YoY и годовая безработица Росстата
     # ========================================================
 
-    annual_gdp_url = (
-        "https://rosstat.gov.ru/storage/mediabank/"
-        "VVP_god_s1995-2025.xlsx"
-    )
-
-    annual_gdp_frame = _ru_excel(
-        annual_gdp_url, "8"
-    )
+    annual_gdp_frame = _ru_rosstat_book("annual", "8")
 
     annual_unemployment_frame = _ru_excel(
         "https://rosstat.gov.ru/storage/mediabank/"
@@ -1380,16 +1426,12 @@ def fetch_russia_quarterly():
 
     # Записываем годовые показатели
     # в строку окончания соответствующего года.
-    for year in (2024, 2025):
-        if year not in annual_gdp_growth:
-            raise ValueError(
-                f"RU {year}: нет годового роста ВВП"
-            )
-
-        if year not in annual_unemployment:
-            raise ValueError(
-                f"RU {year}: нет годовой безработицы"
-            )
+    annual_stat_years = sorted(
+        set(annual_gdp_growth) | set(annual_unemployment)
+    )
+    for year in annual_stat_years:
+        if year >= pd.Timestamp.now().year:
+            continue
 
         mask = (
             result["date"]
@@ -1397,17 +1439,17 @@ def fetch_russia_quarterly():
         )
 
         if mask.sum() != 1:
-            raise ValueError(
-                f"RU {year}: не найдена строка Q4"
-            )
+            continue
 
-        result.loc[
-            mask, "annual_gdp_growth"
-        ] = annual_gdp_growth[year]
+        if year in annual_gdp_growth:
+            result.loc[
+                mask, "annual_gdp_growth"
+            ] = annual_gdp_growth[year]
 
-        result.loc[
-            mask, "annual_unemployment"
-        ] = annual_unemployment[year]
+        if year in annual_unemployment:
+            result.loc[
+                mask, "annual_unemployment"
+            ] = annual_unemployment[year]
 
     print(
         "[RU] Годовой ВВП и безработица:",

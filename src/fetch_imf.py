@@ -77,7 +77,7 @@ def fetch_all_imf() -> pd.DataFrame:
     df = df.dropna(subset=["country", "metric", "year", "value"])
 
     # Оставляем нужные годы
-    df = df[(df["year"] >= 2015) & (df["year"] <= 2030)]
+    df = df[df["year"] >= 2015]
 
     return df[["country", "year", "metric", "value"]].sort_values(
         ["metric", "country", "year"]
@@ -90,6 +90,6 @@ if __name__ == "__main__":
     print(f"Стран: {df['country'].nunique() if not df.empty else 0}")
     if not df.empty:
         print(f"Годы: {df['year'].min()} – {df['year'].max()}")
-        print("\nДанные за 2026:")
-        latest = df[df["year"] == 2026]
+        print(f"\nДанные за {pd.Timestamp.now().year}:")
+        latest = df[df["year"] == pd.Timestamp.now().year]
         print(latest.to_string())

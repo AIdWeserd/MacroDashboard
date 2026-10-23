@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from io import StringIO
+from src.euro_area_geo import all_requested_geos, keep_period_geo, EURO_AREA_GEOS
 
 # Eurostat SDMX 2.1 endpoint
 EUROSTAT_BASE = "https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/data"
@@ -20,7 +21,7 @@ COICOP_CORE = "TOT_X_NRG_FOOD"
 
 # Наши коды -> коды Eurostat
 COUNTRY_TO_GEO = {
-    "EU": "EU27_2020",
+    "EU": "EA21",
     "DE": "DE",
     "FR": "FR",
     "IT": "IT",
@@ -41,6 +42,7 @@ COUNTRY_TO_GEO = {
 }
 
 GEO_TO_COUNTRY = {v: k for k, v in COUNTRY_TO_GEO.items()}
+GEO_TO_COUNTRY.update({geo: "EU" for geo in EURO_AREA_GEOS})
 
 
 def _fetch_slice(unit: str, coicop: str) -> pd.DataFrame:
@@ -48,7 +50,7 @@ def _fetch_slice(unit: str, coicop: str) -> pd.DataFrame:
     Тянет один срез из PRC_HICP_MINR: фиксированные unit и coicop, все наши geo.
     Возвращает DataFrame с колонками: date, country, value.
     """
-    geo_list = "+".join(COUNTRY_TO_GEO.values())
+    geo_list = "+".join(all_requested_geos(COUNTRY_TO_GEO))
     key = f"{FREQ}.{unit}.{coicop}.{geo_list}"
     url = f"{EUROSTAT_BASE}/{DATASET}/{key}"
 
@@ -68,6 +70,7 @@ def _fetch_slice(unit: str, coicop: str) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     df = df.dropna(subset=["date", "value"])
+    df = keep_period_geo(df, "country", "date")
     df["country"] = df["country"].map(GEO_TO_COUNTRY).fillna(df["country"])
     return df
 

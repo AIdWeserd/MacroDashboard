@@ -1,18 +1,20 @@
 import requests
 import pandas as pd
+from src.euro_area_geo import all_requested_geos, keep_period_geo, EURO_AREA_GEOS
 
 EUROSTAT_BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
 
 COUNTRY_TO_GEO = {
-    "EU": "EU27_2020",
+    "EU": "EA21",
     "DE": "DE",
     "FR": "FR",
     "IT": "IT",
     "ES": "ES",
 }
 GEO_TO_COUNTRY = {v: k for k, v in COUNTRY_TO_GEO.items()}
+GEO_TO_COUNTRY.update({geo: "EU" for geo in EURO_AREA_GEOS})
 
-GEO_LIST = list(COUNTRY_TO_GEO.values())
+GEO_LIST = all_requested_geos(COUNTRY_TO_GEO)
 LAST_PERIODS = 20
 
 # Приоритет s_adj: сначала SCA, если нет — NSA
@@ -61,6 +63,7 @@ def _fetch_dataset(dataset: str, extra_params: dict) -> pd.DataFrame:
         "lang": "EN",
         "geo": GEO_LIST,
         "lastTimePeriod": LAST_PERIODS,
+        "freq": "Q",
     }
     params.update(extra_params)
 
@@ -68,6 +71,33 @@ def _fetch_dataset(dataset: str, extra_params: dict) -> pd.DataFrame:
     r = requests.get(url, params=params, timeout=60)
     r.raise_for_status()
     return _parse_jsonstat(r.json())
+
+
+def _fetch_euro_area_bop_quarterly() -> pd.DataFrame:
+    """Current account % GDP outside the euro area, by reporting vintage.
+
+    A euro-area aggregate requires `partner=EXT_EAxx`, not WRL_REST:
+    WRL_REST selects the individual countries' rest-of-world balances.
+    We never derive the euro-area value from national values.
+    """
+    parts = []
+    base = {
+        "freq": "Q", "unit": "PC_GDP", "s_adj": "NSA",
+        "bop_item": "CA", "stk_flow": "BAL",
+    }
+    for geo in EURO_AREA_GEOS:
+        try:
+            frame = _fetch_dataset("bop_gdp6_q", {
+                **base, "geo": [geo], "partner": f"EXT_{geo}",
+            })
+            if not frame.empty:
+                frame = frame[frame["geo"] == geo]
+                parts.append(frame)
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            print(f"[WARN] Eurostat quarterly trade: {geo}, {type(exc).__name__}")
+    if not parts:
+        return pd.DataFrame(columns=["geo", "time", "value"])
+    return pd.concat(parts, ignore_index=True)
 
 
 def _pick_s_adj(df: pd.DataFrame) -> pd.DataFrame:
@@ -128,13 +158,23 @@ def fetch_eurostat_quarterly() -> pd.DataFrame:
             "bop_item": "CA",
             "stk_flow": "BAL",
             "unit": "PC_GDP",
+            "partner": "WRL_REST",
+            "s_adj": "NSA",
         }),
     ]
 
     results = {}
     for metric, dataset, params in datasets:
         try:
-            df = _fetch_dataset(dataset, params)
+            if metric == "trade_gdp":
+                national = _fetch_dataset(dataset, {
+                    **params,
+                    "geo": ["DE", "FR", "IT", "ES"],
+                })
+                euro_area = _fetch_euro_area_bop_quarterly()
+                df = pd.concat([national, euro_area], ignore_index=True)
+            else:
+                df = _fetch_dataset(dataset, params)
             if df.empty:
                 print(f"[WARN] Eurostat quarterly {metric}: пусто")
                 results[metric] = pd.DataFrame(columns=["geo", "time", metric])
@@ -157,9 +197,11 @@ def fetch_eurostat_quarterly() -> pd.DataFrame:
     for other in dfs[1:]:
         result = result.merge(other, on=["geo", "time"], how="outer")
 
-    result["country"] = result["geo"].map(GEO_TO_COUNTRY)
     result["date"] = result["time"].apply(_time_to_quarter_end)
-    result = result.dropna(subset=["date", "country"])
+    result = result.dropna(subset=["date"])
+    result = keep_period_geo(result, "geo", "date")
+    result["country"] = result["geo"].map(GEO_TO_COUNTRY)
+    result = result.dropna(subset=["country"])
 
     cols = ["date", "country", "gdp_growth", "debt_gdp", "budget_gdp", "trade_gdp"]
     for c in cols:

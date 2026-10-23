@@ -115,6 +115,11 @@ BBG_METRICS = (
 )
 
 
+def _run_time() -> pd.Timestamp:
+    """Wall clock at invocation, isolated for deterministic offline tests."""
+    return pd.Timestamp.now()
+
+
 def _month_end(year: int, month: int) -> pd.Timestamp:
     return (
             pd.Timestamp(year=year, month=month, day=1)
@@ -147,57 +152,73 @@ def _last_quarterly_value(
         column: str,
         cutoff: pd.Timestamp,
 ):
-    if df.empty or column not in df.columns:
+    """Возвращает последнее значение ТОЛЬКО за завершённый квартал.
+
+    Источники могут датировать квартал его первым днём (01.01)
+    либо последним (31.03). День месяца сам по себе не указывает
+    на завершение квартала: 31 января — ещё не конец Q1.
+    """
+    if df.empty or not {"country", "date", column}.issubset(df.columns):
         return None, None
 
-    sub = df[
-        (df["country"] == country)
-        & (df["date"] <= cutoff)
-        & df[column].notna()
-        ].copy()
-
+    sub = df.loc[
+        (df["country"] == country) & df[column].notna()
+    ].copy()
     if sub.empty:
         return None, None
 
-    def _quarter_end(date):
-        if date.day >= 28:
-            return date
-        return (
-                date + pd.DateOffset(months=2)
-                + pd.offsets.MonthEnd(0)
-        )
-
-    sub["quarter_end"] = sub["date"].apply(
-        _quarter_end
-    )
-
-    sub = sub[
-        sub["quarter_end"] <= cutoff
-        ]
-
+    sub["date"] = pd.to_datetime(sub["date"], errors="coerce")
+    sub = sub.dropna(subset=["date"])
     if sub.empty:
         return None, None
 
-    last = sub.sort_values("date").iloc[-1]
+    # Применяется к датам начала и конца квартала одинаково.
+    sub["quarter_end"] = sub["date"].dt.to_period("Q").dt.end_time.dt.normalize()
+    sub = sub.loc[sub["quarter_end"] <= cutoff]
+    if sub.empty:
+        return None, None
 
+    last = sub.sort_values(["quarter_end", "date"]).iloc[-1]
     return last[column], last["date"]
 
 
 def _bbg_value(df, country, metric, cutoff):
-    if df.empty:
+    """Выбирает последний ДОПУСТИМЫЙ отчётный период Bloomberg."""
+    if df.empty or not {"country", "metric", "date", "value"}.issubset(df.columns):
         return None, None, None, None
 
-    sub = df[
+    sub = df.loc[
         (df["country"] == country)
         & (df["metric"] == metric)
-        & (df["date"] <= cutoff)
-        ].sort_values("date")
-
+        & df["value"].notna()
+    ].copy()
     if sub.empty:
         return None, None, None, None
 
-    last = sub.iloc[-1]
+    sub["date"] = pd.to_datetime(sub["date"], errors="coerce")
+    sub = sub.dropna(subset=["date"])
+    sub = sub.loc[sub["date"] <= cutoff].copy()
+    if sub.empty:
+        return None, None, None, None
 
+    if "period" not in sub.columns:
+        sub["period"] = ""
+
+    # Проверяем период каждой строки ДО выбора последнего значения,
+    # иначе запись о будущем квартале скрывает допустимый прежний.
+    sub["period_end"] = sub["period"].apply(_bbg_period_end)
+    # Bloomberg Excel is a quarterly source: export date alone does not
+    # prove which economic quarter LAST_UPDATE belongs to.
+    sub = sub.dropna(subset=["period_end"])
+    min_period = (pd.Period(cutoff, freq="Q") - 2).end_time.normalize()
+    sub = sub.loc[
+        (sub["period_end"] <= cutoff) & (sub["period_end"] >= min_period)
+    ]
+    sub["effective_end"] = sub["period_end"]
+    if sub.empty:
+        return None, None, None, None
+
+    last = sub.sort_values(["effective_end", "date"]).iloc[-1]
     return (
         float(last["value"]),
         last["date"],
@@ -236,6 +257,21 @@ def _quarter_label(ts):
     return f"Q{quarter} {ts.year}"
 
 
+def _metric_quarter_label(country, metric, ts):
+    """Fiscal quarter labels only for confirmed April–March source series.
+
+    The Indian MoSPI GDP source calls Apr–Jun Q1, Jul–Sep Q2,
+    Oct–Dec Q3 and Jan–Mar Q4. Other countries' calendar-quarter data
+    retain their calendar labels (including IMF Japan annual data).
+    """
+    if country == "IN" and metric == "gdp_growth":
+        end = pd.Period(pd.Timestamp(ts), freq="Q").end_time.normalize()
+        fy = end.year if end.month >= 4 else end.year - 1
+        fy_quarter = ((end.month - 4) % 12) // 3 + 1
+        return f"FY {fy}/{(fy + 1) % 100:02d} Q{fy_quarter}"
+    return _quarter_label(ts)
+
+
 def _quarterly_to_row(
         row,
         df,
@@ -248,8 +284,11 @@ def _quarterly_to_row(
         labels = {}
 
     for metric in metrics:
+        # A future month selected in the UI must not expose a quarter
+        # that has not elapsed as of the actual scheduler/dashboard run.
+        eligible_cutoff = min(pd.Timestamp(cutoff), _run_time().normalize())
         value, date = _last_quarterly_value(
-            df, country, metric, cutoff
+            df, country, metric, eligible_cutoff
         )
 
         if value is None:
@@ -258,15 +297,38 @@ def _quarterly_to_row(
         row[metric] = round(float(value), 2)
 
         label = labels.get(metric)
+        period_label = _metric_quarter_label(country, metric, date)
 
         if label:
-            row[f"{metric}_date"] = (
-                f"{_quarter_label(date)} ({label})"
-            )
+            row[f"{metric}_date"] = f"{period_label} ({label})"
         else:
-            row[f"{metric}_date"] = (
-                _quarter_label(date)
-            )
+            row[f"{metric}_date"] = period_label
+
+
+def _imf_reference_year(country: str, year: int, month: int) -> int:
+    """WEO India references its April–March fiscal year by START year.
+
+    Most other WEO series in the dashboard are calendar-year series. Never
+    shift Japan/UK national-accounts data merely because government fiscal
+    budgets for those countries have different reporting calendars.
+    """
+    if country == "IN" and month <= 3:
+        return year - 1
+    return year
+
+
+def _is_annual_close(country: str, year: int, month: int) -> bool:
+    """Annual WEO preference: calendar December; India FY closes in March."""
+    return month == (3 if country == "IN" else 12)
+
+
+def _annual_period_closed(country: str, reference_year: int, today) -> bool:
+    """Period complete (not necessarily the publication's latest actual)."""
+    if country == "IN":
+        ending = pd.Timestamp(reference_year + 1, 3, 31)
+    else:
+        ending = pd.Timestamp(reference_year, 12, 31)
+    return pd.Timestamp(today).normalize() > ending
 
 
 def _imf_metric(imf, country, year, metric):
@@ -291,6 +353,23 @@ def _imf_metric(imf, country, year, metric):
     )
 
 
+def _imf_fallback_label(year, detail=None, country=None):
+    """IMF WEO: исторический годовой ряд или текущий/будущий прогноз.
+
+    Прошедшие годы называем годовыми данными из официальной публикации
+    IMF, не утверждая, что каждое наблюдение обязательно окончательное:
+    некоторые исторические годы в WEO могут быть оценками IMF.
+    Проверка статуса actual/estimate потребовала бы metadata latest actual.
+    """
+    descriptor = f", {detail}" if detail else ""
+    period_label = f"FY {year}/{str((year + 1) % 100).zfill(2)}" if country == "IN" else str(year)
+    # For India FY2026/27 remains incomplete through March 2027.
+    completed = _annual_period_closed(country or "", year, _run_time())
+    if completed:
+        return f"{period_label} (IMF WEO{descriptor}, годовые данные)"
+    return f"{period_label} (IMF WEO{descriptor}, прогноз; годовое)"
+
+
 def _annual_from_imf(
         row,
         imf,
@@ -309,43 +388,47 @@ def _annual_from_imf(
 
         if value is not None:
             row[metric] = round(value, 2)
-            row[f"{metric}_date"] = (
-                f"{year} ({label})"
+            # IMF здесь годовой резерв, а не опубликованный квартал.
+            row[f"{metric}_date"] = _imf_fallback_label(
+                year, label.replace("IMF, ", "")
             )
 
 
-def _set_inflation(row, source, cutoff, country):
-    record = _last_inflation_row(
-        source,
-        country,
-        cutoff,
-    )
+def _set_inflation(row, source, cutoff, country, max_age_days=None):
+    """Заполняет отдельные CPI-метрики последними ненулевыми наблюдениями.
 
-    if record is None:
-        return False
+    Уже заполненные более приоритетным источником значения не затираются.
+    Период фиксируется для КАЖДОГО показателя отдельно.
+    """
+    if source.empty or not {"country", "date"}.issubset(source.columns):
+        return row.get("inflation") is not None
 
-    mapping = {
-        "value": "inflation",
-        "mom": "inflation_mom",
-        "core": "inflation_core",
-    }
+    sub = source.loc[source["country"] == country].copy()
+    if sub.empty:
+        return row.get("inflation") is not None
+    sub["date"] = pd.to_datetime(sub["date"], errors="coerce")
+    sub = sub.dropna(subset=["date"])
+    sub = sub.loc[sub["date"] <= cutoff].sort_values("date")
+    if max_age_days is not None:
+        sub = sub.loc[sub["date"] >= cutoff - pd.Timedelta(days=max_age_days)]
+    if sub.empty:
+        return row.get("inflation") is not None
 
-    for source_col, target_col in mapping.items():
-        if source_col not in record.index:
+    for source_col, target_col in (
+        ("value", "inflation"),
+        ("mom", "inflation_mom"),
+        ("core", "inflation_core"),
+    ):
+        if row.get(target_col) is not None or source_col not in sub.columns:
             continue
+        valid = sub.loc[sub[source_col].notna()]
+        if valid.empty:
+            continue
+        last = valid.iloc[-1]
+        row[target_col] = round(float(last[source_col]), 2)
+        row[f"{target_col}_date"] = _date_label(last["date"])
 
-        value = record.get(source_col)
-
-        if pd.notna(value):
-            row[target_col] = round(
-                float(value), 2
-            )
-
-            row[f"{target_col}_date"] = (
-                _date_label(record["date"])
-            )
-
-    return row["inflation"] is not None
+    return row.get("inflation") is not None
 
 
 def _set_unemployment(
@@ -443,7 +526,7 @@ def build_summary(
     switzerland_gdp = load_switzerland_gdp()
     bbg = load_bloomberg()
 
-    now = pd.Timestamp.now()
+    now = _run_time()
 
     if year is None:
         year = now.year
@@ -468,105 +551,46 @@ def build_summary(
         }
 
         # ====================================================
-        # IMF — исходные годовые показатели и fallback
+        # IMF WEO: годовой РЕЗЕРВ для любого выбранного месяца.
+        # Официальный квартальный / годовой источник заменяет этот
+        # резерв ниже; подходящий Bloomberg тоже может заменить IMF.
+        # Оставляем значение, если более точных данных нет — таковы
+        # правила заполнения сводной таблицы Макродашборда.
+        # Подпись явно указывает годовую частоту и прогнозный статус.
         # ====================================================
-
+        imf_year = _imf_reference_year(country, year, month)
         for imf_key, metric in (
-                ("DEBT_GDP", "debt_gdp"),
-                ("BUDGET_GDP", "budget_gdp"),
-                ("TRADE_GDP", "trade_gdp"),
-                ("GDP_GROWTH", "gdp_growth"),
-                ("INFLATION", "inflation_imf"),
+            ("DEBT_GDP", "debt_gdp"),
+            ("BUDGET_GDP", "budget_gdp"),
+            ("TRADE_GDP", "trade_gdp"),
+            ("GDP_GROWTH", "gdp_growth"),
+            ("INFLATION", "inflation_imf"),
         ):
-            value = _imf_metric(
-                imf,
-                country,
-                year,
-                imf_key,
-            )
+            value = _imf_metric(imf, country, imf_year, imf_key)
+            row[metric] = round(value, 2) if value is not None else None
 
-            row[metric] = (
-                round(value, 2)
-                if value is not None
-                else None
+        has_imf = any(
+            row.get(metric) is not None
+            for metric in (
+                "debt_gdp", "budget_gdp", "trade_gdp",
+                "gdp_growth", "inflation_imf",
             )
-
-        imf_date = (
-            f"{year} (IMF, год)"
-            if not imf.empty
-               and year in imf["year"].values
-            else None
         )
-
+        imf_date = _imf_fallback_label(imf_year, country=country) if has_imf else None
         row["imf_date"] = imf_date
 
         for metric in (
-                "debt_gdp",
-                "budget_gdp",
-                "trade_gdp",
-                "gdp_growth",
+            "debt_gdp", "budget_gdp", "trade_gdp", "gdp_growth"
         ):
             row[f"{metric}_date"] = (
-                imf_date
-                if row.get(metric) is not None
-                else None
+                imf_date if row.get(metric) is not None else None
             )
 
-        if row.get("debt_gdp") is not None:
-            row["debt_gdp_date"] = (
-                f"{year} (IMF, Gen Gov)"
-            )
-
-        if row.get("budget_gdp") is not None:
-            row["budget_gdp_date"] = (
-                f"{year} (IMF, Gen Gov)"
-            )
-
-        # ====================================================
-        # Bloomberg — fallback для существующих стран
-        # Россия будет перезаписана официальными данными.
-        # ====================================================
-
-        if not is_finished_year:
-            for metric in BBG_METRICS:
-                value, date, period, source = _bbg_value(
-                    bbg, country, metric, cutoff
+        for metric in ("debt_gdp", "budget_gdp"):
+            if row.get(metric) is not None:
+                row[f"{metric}_date"] = _imf_fallback_label(
+                    imf_year, "Gen Gov", country=country
                 )
-
-                if value is None:
-                    continue
-
-                period_end = _bbg_period_end(
-                    period
-                )
-
-                if (
-                        period_end is not None
-                        and period_end > cutoff
-                ):
-                    continue
-
-                current_label = row.get(
-                    f"{metric}_date"
-                )
-
-                if (
-                        row.get(metric) is None
-                        or (
-                        isinstance(current_label, str)
-                        and "IMF" in current_label
-                )
-                ):
-                    row[metric] = round(value, 2)
-
-                    row[f"{metric}_date"] = (
-                        f"{period} ({source})"
-                        if period
-                        else (
-                            f"{date.strftime('%m.%Y')} "
-                            f"({source})"
-                        )
-                    )
 
         # ====================================================
         # США
@@ -585,7 +609,7 @@ def build_summary(
                 },
             )
 
-            if month == 12 and not us_annual_bea.empty:
+            if month == 12 and is_finished_year and not us_annual_bea.empty:
                 annual = us_annual_bea[
                     us_annual_bea["date"].dt.year == year
                     ]
@@ -609,7 +633,9 @@ def build_summary(
                             )
 
                             row[f"{metric}_date"] = (
-                                f"{year} ({label})" if label else str(year)
+                                _imf_fallback_label(year, "Gen Gov")
+                                if metric == "debt_gdp"
+                                else (f"{year} ({label})" if label else str(year))
                             )
 
         # ====================================================
@@ -630,7 +656,7 @@ def build_summary(
                 ),
             )
 
-            if month == 12 and not eurostat_a.empty:
+            if month == 12 and is_finished_year and not eurostat_a.empty:
                 annual = eurostat_a[
                     (eurostat_a["country"] == country)
                     & (
@@ -695,7 +721,7 @@ def build_summary(
                 },
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 _annual_from_imf(
                     row, imf, "GB", year
                 )
@@ -714,7 +740,7 @@ def build_summary(
                 {"debt_gdp": "Central Gov"},
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 value = _imf_metric(
                     imf, "JP", year, "DEBT_GDP"
                 )
@@ -723,8 +749,8 @@ def build_summary(
                     row["debt_gdp"] = round(
                         value, 2
                     )
-                    row["debt_gdp_date"] = (
-                        f"{year} (IMF, Gen Gov)"
+                    row["debt_gdp_date"] = _imf_fallback_label(
+                        year, "Gen Gov"
                     )
 
         # ====================================================
@@ -759,7 +785,7 @@ def build_summary(
                 },
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 _annual_from_imf(
                     row, imf, "AU", year
                 )
@@ -790,7 +816,7 @@ def build_summary(
                 ("gdp_growth",),
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 _annual_from_imf(
                     row, imf, "CH", year
                 )
@@ -821,7 +847,7 @@ def build_summary(
                 },
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 _annual_from_imf(
                     row, imf, "CA", year
                 )
@@ -851,20 +877,9 @@ def build_summary(
                 },
             )
 
-            # Для бюджета Сингапура — IMF годовое.
-            budget = _imf_metric(
-                imf, "SG", year, "BUDGET_GDP"
-            )
-
-            if budget is not None:
-                row["budget_gdp"] = round(
-                    budget, 2
-                )
-                row["budget_gdp_date"] = (
-                    f"{year} (IMF, Gen Gov)"
-                )
-
-            if month == 12:
+            # Годовой бюджет IMF уже доступен как резерв в любой месяц.
+            # В декабре сохраняем существующую годовую методологию.
+            if month == 12 and is_finished_year:
                 _annual_from_imf(
                     row, imf, "SG", year
                 )
@@ -896,7 +911,7 @@ def build_summary(
                 },
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 _annual_from_imf(
                     row, imf, "BR", year
                 )
@@ -928,7 +943,7 @@ def build_summary(
                 {"debt_gdp": "Central Gov"},
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 applied = False
 
                 if not china_debt_fred.empty:
@@ -946,8 +961,8 @@ def build_summary(
                             row["debt_gdp"] = round(
                                 float(value), 2
                             )
-                            row["debt_gdp_date"] = (
-                                f"{year} (IMF, Gen Gov)"
+                            row["debt_gdp_date"] = _imf_fallback_label(
+                                year, "Gen Gov"
                             )
                             applied = True
 
@@ -963,8 +978,8 @@ def build_summary(
                         row["debt_gdp"] = round(
                             value, 2
                         )
-                        row["debt_gdp_date"] = (
-                            f"{year} (IMF, Gen Gov)"
+                        row["debt_gdp_date"] = _imf_fallback_label(
+                            year, "Gen Gov"
                         )
 
             _quarterly_to_row(
@@ -981,7 +996,7 @@ def build_summary(
                 },
             )
 
-            if month == 12:
+            if month == 12 and is_finished_year:
                 budget = _imf_metric(
                     imf,
                     "CN",
@@ -993,8 +1008,8 @@ def build_summary(
                     row["budget_gdp"] = round(
                         budget, 2
                     )
-                    row["budget_gdp_date"] = (
-                        f"{year} (IMF, Gen Gov)"
+                    row["budget_gdp_date"] = _imf_fallback_label(
+                        year, "Gen Gov"
                     )
 
             _quarterly_to_row(
@@ -1031,79 +1046,42 @@ def build_summary(
             "SG": cpi_sg,
         }
 
-        found = _set_inflation(
-            row,
-            eurostat,
-            cutoff,
-            country,
-        )
+        # Для стран Еврозоны сохраняем HICP Eurostat как основной ряд.
+        # Для остальных стран сначала используем национальную статистику,
+        # затем FRED в качестве резервного источника для пустых компонентов.
+        if country in EUROSTAT_QUARTERLY_COUNTRIES:
+            _set_inflation(row, eurostat, cutoff, country)
 
-        if not found and not cpi_fred.empty:
-            fred_row = _last_inflation_row(
-                cpi_fred,
-                country,
-                cutoff,
-            )
+        if country in source_map:
+            _set_inflation(row, source_map[country], cutoff, country)
 
-            if fred_row is not None:
-                age_days = (
-                        cutoff - fred_row["date"]
-                ).days
+        # Если основной источник не содержит отдельного компонента,
+        # FRED может заполнить только этот компонент, не затирая остальные.
+        _set_inflation(row, cpi_fred, cutoff, country, max_age_days=200)
 
-                if age_days <= 200:
-                    found = _set_inflation(
-                        row,
-                        cpi_fred,
-                        cutoff,
-                        country,
-                    )
+        if country == "CN" and row["inflation_core"] is None:
+            if not cpi_cn_core.empty and {
+                "date", "country", "inflation_core"
+            }.issubset(cpi_cn_core.columns):
+                core = cpi_cn_core.loc[
+                    (cpi_cn_core["country"] == "CN")
+                    & cpi_cn_core["inflation_core"].notna()
+                ].copy()
+                core["date"] = pd.to_datetime(core["date"], errors="coerce")
+                core = core.loc[core["date"] <= cutoff].sort_values("date")
+                if not core.empty:
+                    record = core.iloc[-1]
+                    row["inflation_core"] = round(float(record["inflation_core"]), 2)
+                    row["inflation_core_date"] = _date_label(record["date"])
 
-        if (
-                not found
-                and country in source_map
-        ):
-            found = _set_inflation(
-                row,
-                source_map[country],
-                cutoff,
-                country,
-            )
-
-        if (
-                country == "CN"
-                and row["inflation_core"] is None
-                and not cpi_cn_core.empty
-        ):
-            core_row = _last_inflation_row(
-                cpi_cn_core,
-                "CN",
-                cutoff,
-            )
-
-            if core_row is not None:
-                value = core_row.get(
-                    "inflation_core"
-                )
-
-                if pd.notna(value):
-                    row["inflation_core"] = round(
-                        float(value), 2
-                    )
-                    row["inflation_core_date"] = (
-                        _date_label(core_row["date"])
-                    )
-
+        # Если месячного CPI нет, годовая инфляция IMF заполняет
+        # пробел, но подпись НЕ выдаёт её за месячный CPI YoY.
         if row["inflation"] is None:
-            annual_inflation = row.get(
-                "inflation_imf"
-            )
-
+            annual_inflation = row.get("inflation_imf")
             if annual_inflation is not None:
-                row["inflation"] = (
-                    annual_inflation
-                )
-                row["inflation_date"] = (
-                    f"{year} (IMF, год)"
+                row["inflation"] = annual_inflation
+                row["inflation_date"] = _imf_fallback_label(
+                    imf_year, "годовая инфляция, не месячный YoY", country=country
                 )
 
         # ====================================================
@@ -1200,12 +1178,10 @@ def build_summary(
 
         if country == "RU":
             # Рост ВВП и безработица ещё не интегрированы.
-            for metric in (
-                    "gdp_growth",
-                    "unemployment",
-            ):
-                row[metric] = None
-                row[f"{metric}_date"] = None
+            # Безработица не входит в доступные прогнозы IMF WEO.
+            # ВВП сохраняет IMF как резерв, пока нет данных Росстата.
+            row["unemployment"] = None
+            row["unemployment_date"] = None
 
             # Декабрь: IMF annual.
             # Остальные месяцы: последний полный квартал.
@@ -1213,7 +1189,7 @@ def build_summary(
             # Два показателя Росстата:
             # последние завершённые кварталы.
             # В декабре не подменяем годовой ВВП Q4.
-            if month != 12:
+            if month != 12 or not is_finished_year:
                 _quarterly_to_row(
                     row,
                     ru_quarterly,
@@ -1222,7 +1198,7 @@ def build_summary(
                     ("gdp_growth", "unemployment"),
                 )
 
-            if month != 12:
+            if month != 12 or not is_finished_year:
                 _quarterly_to_row(
                     row,
                     ru_quarterly,
@@ -1286,7 +1262,7 @@ def build_summary(
 
             # Декабрь: годовые показатели России.
             # Q4 не используется вместо полного года.
-            if month == 12 and not ru_quarterly.empty:
+            if month == 12 and is_finished_year and not ru_quarterly.empty:
                 annual = ru_quarterly.loc[
                     (ru_quarterly["country"] == "RU")
                     & (
@@ -1329,7 +1305,7 @@ def build_summary(
 
             # Годовые ВВП и безработица России.
             # В декабре квартальные значения не используем.
-            if month == 12 and not ru_quarterly.empty:
+            if month == 12 and is_finished_year and not ru_quarterly.empty:
                 annual = ru_quarterly.loc[
                     (ru_quarterly["country"] == "RU")
                     & (
@@ -1359,6 +1335,62 @@ def build_summary(
                             row[f"{metric}_date"] = str(year)
 
 
+        # ====================================================
+        # Historics: annual at the end of the appropriate reporting year.
+        # Official annual records set by country blocks above win; if a
+        # quarterly value remains, replace it with the WEO annual figure.
+        # A fiscal year is *not* the same thing as calendar December in India.
+        # ====================================================
+        if _is_annual_close(country, year, month) and _annual_period_closed(
+            country, imf_year, now
+        ):
+            for metric, imf_key in (
+                ("debt_gdp", "DEBT_GDP"),
+                ("budget_gdp", "BUDGET_GDP"),
+                ("trade_gdp", "TRADE_GDP"),
+                ("gdp_growth", "GDP_GROWTH"),
+            ):
+                previous = str(row.get(f"{metric}_date") or "")
+                if previous and not previous.startswith("Q"):
+                    # Official calendar / fiscal annual indicator already set.
+                    continue
+                annual_value = _imf_metric(imf, country, imf_year, imf_key)
+                if annual_value is not None:
+                    row[metric] = round(annual_value, 2)
+                    detail = "Gen Gov" if metric in ("debt_gdp", "budget_gdp") else None
+                    row[f"{metric}_date"] = _imf_fallback_label(
+                        imf_year, detail, country=country
+                    )
+
+        # ====================================================
+        # Bloomberg — только fallback ПОСЛЕ всех официальных источников.
+        # Декабрь остаётся годовым; Россия использует только официальные ряды.
+        # Bloomberg заменяет резерв IMF, но не официальную публикацию.
+        # ====================================================
+        if not is_finished_year and country != "RU":
+            for metric in BBG_METRICS:
+                value, date, period, source = _bbg_value(
+                    bbg, country, metric,
+                    min(cutoff, _run_time().normalize())
+                )
+                if value is None:
+                    continue
+
+                current_label = row.get(f"{metric}_date")
+                uses_annual_imf = (
+                    isinstance(current_label, str)
+                    and "IMF WEO" in current_label
+                )
+                if row.get(metric) is not None and not uses_annual_imf:
+                    continue
+
+                row[metric] = round(value, 2)
+                row[f"{metric}_date"] = (
+                    f"{period} ({source})" if period
+                    else f"{date.strftime('%m.%Y')} ({source})"
+                )
+
         rows.append(row)
 
     return pd.DataFrame(rows)
+

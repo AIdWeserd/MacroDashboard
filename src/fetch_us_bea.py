@@ -5,7 +5,12 @@ from config import BEA_API_KEY, FRED_API_KEY
 
 BEA_BASE = "https://apps.bea.gov/api/data/"
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
-START_YEAR = "2024"
+START_YEAR = 2023
+
+
+def _requested_years() -> str:
+    """From initial source history through current calendar year; never fixed at 2026."""
+    return ",".join(str(y) for y in range(START_YEAR, pd.Timestamp.now().year + 1))
 
 
 def _get(params: dict, retries: int = 3) -> dict:
@@ -36,7 +41,7 @@ def fetch_us_gdp() -> pd.DataFrame:
         "DataSetName": "NIPA",
         "TableName": "T10105",
         "Frequency": "Q",
-        "Year": f"{START_YEAR},2025,2026",
+        "Year": _requested_years(),
         "ResultFormat": "JSON",
     }
     data = _get(params)
@@ -60,7 +65,7 @@ def fetch_us_current_account() -> pd.DataFrame:
         "Indicator": "BalCurrAcct",
         "AreaOrCountry": "AllCountries",
         "Frequency": "QSA",
-        "Year": f"{START_YEAR},2025,2026",
+        "Year": _requested_years(),
         "ResultFormat": "JSON",
     }
     data = _get(params)
@@ -162,7 +167,7 @@ def fetch_us_general_gov_annual() -> pd.DataFrame:
     - trade_gdp  = Current Account (annual) / GDP * 100
     - debt_gdp   = FRED USAGGXWDGGDP (IMF, General Gov Gross Debt % GDP)
     """
-    years = "2023,2024,2025"
+    years = _requested_years()
 
     fed = _fetch_nipa_annual("T30100", years)
     sl = _fetch_nipa_annual("T30300", years)

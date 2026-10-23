@@ -102,8 +102,11 @@ def fetch_korea_quarterly() -> pd.DataFrame:
               f"(GDP={gdp_period}, Debt={debt_period})")
         return pd.DataFrame()
 
-    # Берём общий период (обычно совпадают — Q2/26)
-    quarter = max(gdp_ts, debt_ts)
+    # Never combine a debt stock and GDP observation from different quarters.
+    if gdp_ts != debt_ts:
+        print(f"[WARN] Korea DSBB: разные периоды GDP={gdp_period}, Debt={debt_period}; пропуск")
+        return pd.DataFrame()
+    quarter = gdp_ts
 
     # ВВП в DSBB — квартальный SAAR (уже аннуализированный)
     # Единицы: и ВВП, и долг — в млрд вон.

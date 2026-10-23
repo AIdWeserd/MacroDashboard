@@ -713,6 +713,7 @@ from src.storage import (
     load_russia_credit,
     load_russia_mortgage,
     load_russia_cbr_reference,
+    load_russia_ruonia,
     load_russia_money,
     load_russia_trade,
     load_russia_trade_estimates,
@@ -984,11 +985,11 @@ if active_country is not None:
                     name=label,
                     customdata=series[[key, "date"]].to_numpy(),
                     hovertemplate=(
-                        "%{fullData.name}<br>Месяц: %{x|%m.%Y}"
-                        "<br>Индекс: %{y:.2f}"
-                        "<br>Исходное значение: %{customdata[0]:,.3f} " + unit +
-                        "<br>Отчётная дата: %{customdata[1]|%d.%m.%Y}"
-                        "<extra></extra>"
+                            "%{fullData.name}<br>Месяц: %{x|%m.%Y}"
+                            "<br>Индекс: %{y:.2f}"
+                            "<br>Исходное значение: %{customdata[0]:,.3f} " + unit +
+                            "<br>Отчётная дата: %{customdata[1]|%d.%m.%Y}"
+                            "<extra></extra>"
                     ),
                 ))
                 plotted += 1
@@ -1004,6 +1005,7 @@ if active_country is not None:
                 margin={"l": 30, "r": 20, "t": 60, "b": 90},
             )
             st.plotly_chart(fig, use_container_width=True)
+
 
         # ====================================================
         # РАЗДЕЛЫ ДЕТАЛЬНОЙ СТРАНИЦЫ
@@ -1036,7 +1038,6 @@ if active_country is not None:
             "Статистика ЦБ РФ",
             "Другие показатели",
         ])
-
 
         with rates_tab:
             st.subheader(
@@ -1072,7 +1073,7 @@ if active_country is not None:
             if not detail_rates.empty:
                 detail_rates = detail_rates.loc[
                     detail_rates["country"] == "RU"
-                ].copy()
+                    ].copy()
 
                 detail_rates["date"] = pd.to_datetime(
                     detail_rates["date"]
@@ -1080,7 +1081,7 @@ if active_country is not None:
 
                 detail_rates = detail_rates.loc[
                     detail_rates["date"] >= "2020-01-01"
-                ]
+                    ]
 
             else:
                 detail_rates = pd.DataFrame(
@@ -1102,7 +1103,7 @@ if active_country is not None:
 
                 key_rates = key_rates.loc[
                     key_rates["date"] >= "2020-01-01"
-                ]
+                    ]
 
                 detail_rates = detail_rates.merge(
                     key_rates,
@@ -1118,8 +1119,8 @@ if active_country is not None:
                 key: label
                 for key, label in labels.items()
                 if (
-                    key in detail_rates.columns
-                    and detail_rates[key].notna().any()
+                        key in detail_rates.columns
+                        and detail_rates[key].notna().any()
                 )
             }
 
@@ -1143,24 +1144,24 @@ if active_country is not None:
                 )
 
                 with st.popover(
-                    f"Выбери ставки для сравнения ({checked_count} из {len(available)})",
-                    use_container_width=True,
+                        f"Выбери ставки для сравнения ({checked_count} из {len(available)})",
+                        use_container_width=True,
                 ):
                     col_all, col_none = st.columns(2)
                     with col_all:
                         if st.button(
-                            "Выбрать все",
-                            key="ru_rate_select_all",
-                            use_container_width=True,
+                                "Выбрать все",
+                                key="ru_rate_select_all",
+                                use_container_width=True,
                         ):
                             for key in available:
                                 st.session_state[f"ru_rate_checked_{key}"] = True
                             st.rerun()
                     with col_none:
                         if st.button(
-                            "Снять все",
-                            key="ru_rate_clear_all",
-                            use_container_width=True,
+                                "Снять все",
+                                key="ru_rate_clear_all",
+                                use_container_width=True,
                         ):
                             for key in available:
                                 st.session_state[f"ru_rate_checked_{key}"] = False
@@ -1370,27 +1371,27 @@ if active_country is not None:
             else:
                 credit_data = credit_data.loc[
                     credit_data["country"] == "RU"
-                ].copy()
+                    ].copy()
                 credit_data["date"] = pd.to_datetime(
                     credit_data["date"]
                 )
                 credit_data = credit_data.loc[
                     credit_data["date"] >= "2020-01-01"
-                ].sort_values("date")
+                    ].sort_values("date")
 
                 available_credit = {
                     key: label
                     for key, label in credit_labels.items()
                     if key in credit_data.columns
-                    and credit_data[key].notna().any()
+                       and credit_data[key].notna().any()
                 }
 
                 if not available_credit:
                     st.info("Нет доступных показателей задолженности.")
                 else:
                     with st.popover(
-                        "Показатели кредитования: выбрать галочками",
-                        use_container_width=True,
+                            "Показатели кредитования: выбрать галочками",
+                            use_container_width=True,
                     ):
                         for key, label in available_credit.items():
                             widget = f"ru_credit_checked_{key}"
@@ -1461,11 +1462,11 @@ if active_country is not None:
             else:
                 mortgage = mortgage.loc[
                     mortgage["country"] == "RU"
-                ].copy()
+                    ].copy()
                 mortgage["date"] = pd.to_datetime(mortgage["date"])
                 mortgage = mortgage.loc[
                     mortgage["date"] >= "2020-01-01"
-                ].sort_values("date")
+                    ].sort_values("date")
 
                 mortgage_metrics = {
                     "rate_pct": ("Средневзвешенная ставка", "% годовых"),
@@ -1506,8 +1507,8 @@ if active_country is not None:
                 )
                 mortgage_selection = list(mortgage_metrics)
                 with st.popover(
-                    "Показатели ипотеки: выбрать галочками",
-                    use_container_width=True,
+                        "Показатели ипотеки: выбрать галочками",
+                        use_container_width=True,
                 ):
                     for key, (label, unit) in mortgage_metrics.items():
                         cb = f"ru_mortgage_checked_{key}"
@@ -1547,10 +1548,12 @@ if active_country is not None:
             all_rows = []
             all_labels = {}
 
+
             def include_series(data, key, title, unit):
                 if not data.empty and key in data.columns and data[key].notna().any():
                     all_rows.append((data, key, title, unit))
                     all_labels[key] = title
+
 
             # Ставки, включая дополнительный корпоративный ряд.
             for key, title in labels.items():
@@ -1561,7 +1564,7 @@ if active_country is not None:
             if not credit_for_compare.empty:
                 credit_for_compare = credit_for_compare.loc[
                     credit_for_compare["country"] == "RU"
-                ].copy()
+                    ].copy()
             for key, title in {
                 "personal_debt": "Задолженность физических лиц",
                 "company_debt": "Задолженность юридических лиц и ИП",
@@ -1574,7 +1577,7 @@ if active_country is not None:
             if not mortgage_for_compare.empty:
                 mortgage_for_compare = mortgage_for_compare.loc[
                     mortgage_for_compare["country"] == "RU"
-                ].copy()
+                    ].copy()
             for key, (title, unit) in {
                 "rate_pct": ("Ипотека: ставка", "% годовых"),
                 "term_months": ("Ипотека: срок", "месяцев"),
@@ -1694,7 +1697,7 @@ if active_country is not None:
                 trade["date"] = pd.to_datetime(trade["date"])
                 trade = trade.loc[trade["date"] >= "2020-01-01"].sort_values("date")
                 available_trade = {
-                    k:v for k,v in trade_labels.items()
+                    k: v for k, v in trade_labels.items()
                     if k in trade.columns and trade[k].notna().any()
                 }
                 for key in available_trade:
@@ -1716,20 +1719,20 @@ if active_country is not None:
                     for key, title in available_trade.items():
                         st.checkbox(title, key=f"ru_trade_checked_{key}")
                 selection = {
-                    key: title for key,title in available_trade.items()
+                    key: title for key, title in available_trade.items()
                     if st.session_state.get(f"ru_trade_checked_{key}", False)
                 }
                 if selection:
                     ru_line_chart(trade, "Внешняя торговля товарами", selection, unit="млрд USD")
                 else:
                     st.info("Выбери хотя бы один ряд.")
-                recent=[]
-                for key,title in available_trade.items():
-                    v=trade[["date",key]].dropna(subset=[key]).sort_values("date")
+                recent = []
+                for key, title in available_trade.items():
+                    v = trade[["date", key]].dropna(subset=[key]).sort_values("date")
                     if not v.empty:
-                        last=v.iloc[-1]
-                        recent.append({"Показатель":title,"Дата":last["date"].strftime("%m.%Y"),
-                                       "млрд USD":round(float(last[key]),3)})
+                        last = v.iloc[-1]
+                        recent.append({"Показатель": title, "Дата": last["date"].strftime("%m.%Y"),
+                                       "млрд USD": round(float(last[key]), 3)})
                 if recent:
                     st.subheader("Последние опубликованные месячные значения")
                     st.dataframe(pd.DataFrame(recent), hide_index=True, use_container_width=True)
@@ -1744,7 +1747,7 @@ if active_country is not None:
                 estimates["date"] = pd.to_datetime(estimates["date"])
                 estimates = estimates.sort_values("date")
                 cols = ["date"] + [k for k in trade_labels if k in estimates.columns]
-                view = estimates[cols].rename(columns={"date":"Период", **trade_labels})
+                view = estimates[cols].rename(columns={"date": "Период", **trade_labels})
                 st.dataframe(view, hide_index=True, use_container_width=True)
                 st.caption("Источник: ЦБ РФ, bop_est.xlsx. Только месяцы с явной пометкой «оценка». "
                            "Оценки хранятся отдельно и не перезаписывают исторические значения.")
@@ -1799,6 +1802,7 @@ if active_country is not None:
                         return None
                     return observed.iloc[-1]
 
+
                 def _metric_value(key):
                     last = _latest_investor_value(key)
                     if last is None:
@@ -1813,6 +1817,7 @@ if active_country is not None:
                             qualifier = str(hit.iloc[-1][qualifier_col]) + " "
                     return (qualifier + f"{value:,.2f}".replace(",", " ").replace(".", ",")
                             + " " + unit, last["date"].strftime("%m.%Y"))
+
 
                 # KPI-карточки: разные показатели могут иметь разные последние месяцы.
                 kpi_keys = [
@@ -1854,6 +1859,7 @@ if active_country is not None:
                     "Вложения", "Инвесторы", "Доля в обороте", "ИИС",
                 ])
 
+
                 def _choose_investor_metrics(group_id, metric_keys):
                     available = [key for key in metric_keys
                                  if key in shown.columns and shown[key].notna().any()]
@@ -1866,7 +1872,8 @@ if active_country is not None:
                             st.session_state[state_key] = True
                     chosen = [key for key in available
                               if st.session_state.get("ru_investor_visual_" + key, False)]
-                    with st.popover(f"Показатели на графике ({len(chosen)} из {len(available)})", use_container_width=True):
+                    with st.popover(f"Показатели на графике ({len(chosen)} из {len(available)})",
+                                    use_container_width=True):
                         c1, c2 = st.columns(2)
                         if c1.button("Выбрать все", key="ru_inv_all_" + group_id, use_container_width=True):
                             for key in available:
@@ -1880,6 +1887,7 @@ if active_country is not None:
                             st.checkbox(investor_metrics[key][0], key="ru_investor_visual_" + key)
                     return [key for key in available
                             if st.session_state.get("ru_investor_visual_" + key, False)]
+
 
                 def _investor_plot(keys, title, unit):
                     if not keys:
@@ -1913,6 +1921,7 @@ if active_country is not None:
                     )
                     fig.update_xaxes(range=[from_date, max(now_month, shown["date"].max())])
                     st.plotly_chart(fig, use_container_width=True)
+
 
                 with investments_tab:
                     st.markdown("#### Вложения частных инвесторов")
@@ -1989,7 +1998,7 @@ if active_country is not None:
                         continue
                     source_rows = investors.loc[
                         investors["date"] == row["date"]
-                    ]
+                        ]
                     source_url = source_rows.iloc[-1].get("source_url", "") if not source_rows.empty else ""
                     latest_rows.append({
                         "Показатель": label,
@@ -2012,7 +2021,7 @@ if active_country is not None:
                 export_columns = ["date"] + [
                     key for key in investor_metrics if key in shown.columns
                 ] + [key for key in ("active_investors_mln_qualifier", "brokerage_clients_mln_qualifier",
-                                      "source_url", "publication_date") if key in shown.columns]
+                                     "source_url", "publication_date") if key in shown.columns]
                 export = shown[export_columns].copy()
                 export["date"] = export["date"].dt.strftime("%Y-%m")
                 st.download_button(
@@ -2105,7 +2114,96 @@ if active_country is not None:
                                "средний ИИС — только брокерские ИИС. "
                                "Погашение паёв показано положительным опубликованным объёмом.")
             if reference.empty:
-                st.info("Чтобы загрузить справочные показатели: python scheduler.py ru")
+                st.info("Чтобы загрузить справочные показатели: python scheduler.py ru_reference")
+
+            st.divider()
+            st.subheader("Объём сделок RUONIA — опубликованный дневной ряд ЦБ")
+            ruonia = load_russia_ruonia()
+
+            if ruonia.empty:
+                st.info("Для загрузки RUONIA: python scheduler.py ru_ruonia")
+            else:
+                ruonia = ruonia.copy()
+                if "country" in ruonia.columns:
+                    ruonia = ruonia.loc[ruonia["country"] == "RU"]
+                ruonia["date"] = pd.to_datetime(ruonia["date"], errors="coerce")
+                ruonia["ruonia_volume_bln_rub"] = pd.to_numeric(
+                    ruonia["ruonia_volume_bln_rub"], errors="coerce"
+                )
+                ruonia = (
+                    ruonia.dropna(subset=["date", "ruonia_volume_bln_rub"])
+                    .sort_values("date")
+                    .drop_duplicates(subset=["date"], keep="last")
+                )
+
+                if ruonia.empty:
+                    st.warning("В сохранённых данных RUONIA нет корректных дневных значений.")
+                else:
+                    last = ruonia.iloc[-1]
+                    st.metric(
+                        "Объём сделок RUONIA, млрд руб.",
+                        f"{float(last['ruonia_volume_bln_rub']):,.2f}".replace(",", " "),
+                        help=f"Дата ставки: {last['date']:%d.%m.%Y}; источник: Банк России",
+                    )
+
+                    period = st.selectbox(
+                        "Период графика RUONIA",
+                        ("Вся история", "Последние 12 месяцев", "Последние 90 дней"),
+                        key="ru_ruonia_chart_period",
+                    )
+                    shown = ruonia
+                    if period == "Последние 12 месяцев":
+                        shown = ruonia.loc[
+                            ruonia["date"] >= last["date"] - pd.DateOffset(months=12)
+                            ]
+                    elif period == "Последние 90 дней":
+                        shown = ruonia.loc[
+                            ruonia["date"] >= last["date"] - pd.Timedelta(days=90)
+                            ]
+
+                    fig_ruonia = go.Figure()
+                    fig_ruonia.add_trace(
+                        go.Scatter(
+                            x=shown["date"],
+                            y=shown["ruonia_volume_bln_rub"],
+                            mode="lines",
+                            name="Объём сделок RUONIA",
+                            line={"width": 2},
+                            hovertemplate=(
+                                "Дата: %{x|%d.%m.%Y}<br>"
+                                "Объём: %{y:,.2f} млрд ₽<extra></extra>"
+                            ),
+                        )
+                    )
+                    fig_ruonia.update_layout(
+                        title="Объём сделок RUONIA — дневная динамика",
+                        xaxis_title="Дата ставки",
+                        yaxis_title="Млрд руб.",
+                        hovermode="x unified",
+                        margin={"l": 30, "r": 20, "t": 60, "b": 35},
+                    )
+                    st.plotly_chart(fig_ruonia, use_container_width=True)
+                    st.caption(
+                        f"На графике {len(shown)} официальных дневных наблюдений. "
+                        "Прочерки в источнике не заменяются нулями, "
+                        "значения не агрегируются и не рассчитываются."
+                    )
+
+                    with st.expander("Последние 30 опубликованных наблюдений RUONIA"):
+                        table_ruonia = ruonia[["date", "ruonia_volume_bln_rub"]].rename(
+                            columns={
+                                "date": "Дата ставки",
+                                "ruonia_volume_bln_rub": "Объём сделок, млрд руб.",
+                            }
+                        )
+                        st.dataframe(
+                            table_ruonia.sort_values("Дата ставки", ascending=False).head(30),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                    st.caption(
+                        "Источник: https://www.cbr.ru/hd_base/ruonia/dynamics/"
+                    )
 
         with other_tab:
             st.subheader("Идеи для дальнейшего развития")

@@ -10,7 +10,16 @@ HEADERS = {
 }
 
 # Сколько лет запрашивать (для расчёта YoY нужно минимум 2, берём 5 лет)
-YEARS = "2026-27,2025-26,2024-25,2023-24,2022-23"
+def _requested_fiscal_years() -> str:
+    """MoSPI labels FY by its starting calendar year (April–March)."""
+    now = pd.Timestamp.now()
+    current_fy = now.year if now.month >= 4 else now.year - 1
+    # Include extra history for the source YoY transform, preserving 2022–23.
+    start_year = 2022
+    return ",".join(
+        f"{year}-{(year + 1) % 100:02d}"
+        for year in range(current_fy, start_year - 1, -1)
+    )
 
 
 def _call_mcp(name: str, arguments: dict) -> dict | None:
@@ -77,8 +86,8 @@ def fetch_india_gdp() -> pd.DataFrame:
             "series": "Current",
             "frequency_code": "2",  # Quarterly
             "indicator_code": 5,  # Gross Domestic Product
-            "year": YEARS,
-            "limit": 100,
+            "year": _requested_fiscal_years(),
+            "limit": max(100, 4 * len(_requested_fiscal_years()) + 20),
             "Format": "JSON",
         },
     })

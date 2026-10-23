@@ -4,27 +4,28 @@
 Источник: Eurostat
     - gov_10dd_edpt1 (annual): debt_gdp, budget_gdp
     - bop_gdp6_q (annual): trade_gdp (Current Account % GDP)
-      * Для DE, FR, IT, ES — partner=WRL_REST
-      * Для EU27 — partner=EXT_EU27_2020
+      * Страны: partner=WRL_REST; Еврозона: partner=EXT_EAxx
+      * Еврозона: EA19/EA20/EA21 в зависимости от периода
 
 Date = 31 декабря каждого года.
 """
 
 import requests
 import pandas as pd
+from src.euro_area_geo import all_requested_geos, keep_period_geo, EURO_AREA_GEOS
 
 EUROSTAT_BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
 
 COUNTRY_TO_GEO = {
-    "EU": "EU27_2020",
+    "EU": "EA21",
     "DE": "DE",
     "FR": "FR",
     "IT": "IT",
     "ES": "ES",
 }
 GEO_TO_COUNTRY = {v: k for k, v in COUNTRY_TO_GEO.items()}
-GEO_LIST = list(COUNTRY_TO_GEO.values())
-GEO_LIST_EXCL_EU = [g for g in GEO_LIST if g != "EU27_2020"]
+GEO_TO_COUNTRY.update({geo: "EU" for geo in EURO_AREA_GEOS})
+GEO_LIST = all_requested_geos(COUNTRY_TO_GEO)
 
 LAST_PERIODS = 5
 
@@ -109,6 +110,21 @@ def _fetch_bop_annual_slice(geos: list[str], partner: str) -> pd.DataFrame:
     return _parse_jsonstat(r.json())
 
 
+def _fetch_euro_area_bop_annual() -> pd.DataFrame:
+    """Read official annual euro-area current account ratios (extra-EA)."""
+    frames = []
+    for geo in EURO_AREA_GEOS:
+        try:
+            frame = _fetch_bop_annual_slice([geo], f"EXT_{geo}")
+            if not frame.empty:
+                frames.append(frame[frame["geo"] == geo])
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            print(f"[WARN] Eurostat annual trade: {geo}, {type(exc).__name__}")
+    if not frames:
+        return pd.DataFrame(columns=["geo", "time", "value"])
+    return pd.concat(frames, ignore_index=True)
+
+
 def _time_to_year_end(time_code: str) -> pd.Timestamp | None:
     """'2025' → 2025-12-31"""
     try:
@@ -146,31 +162,19 @@ def fetch_eurostat_annual() -> pd.DataFrame:
         debt_df = gd
         budget_df = b9
 
-    # 2. bop_gdp6_q (annual) — trade_gdp
-    # Для DE, FR, IT, ES — partner=WRL_REST
-    # Для EU27 — partner=EXT_EU27_2020
-    trade_frames = []
+    # 2. Annual current account % GDP, partner Rest of the world,
+    # including a period-appropriate euro-area aggregate.
     try:
-        df_bop_rest = _fetch_bop_annual_slice(GEO_LIST_EXCL_EU, "WRL_REST")
-        if not df_bop_rest.empty:
-            trade_frames.append(
-                df_bop_rest[["geo", "time", "value"]].rename(columns={"value": "trade_gdp"})
-            )
+        national = _fetch_bop_annual_slice(["DE", "FR", "IT", "ES"], "WRL_REST")
+        euro_area = _fetch_euro_area_bop_annual()
+        df_bop = pd.concat([national, euro_area], ignore_index=True)
+        trade_df = (
+            df_bop[["geo", "time", "value"]].rename(columns={"value": "trade_gdp"})
+            if not df_bop.empty
+            else pd.DataFrame(columns=["geo", "time", "trade_gdp"])
+        )
     except Exception as e:
         print(f"[WARN] Eurostat annual bop (WRL_REST): {e}")
-
-    try:
-        df_bop_ext = _fetch_bop_annual_slice(["EU27_2020"], "EXT_EU27_2020")
-        if not df_bop_ext.empty:
-            trade_frames.append(
-                df_bop_ext[["geo", "time", "value"]].rename(columns={"value": "trade_gdp"})
-            )
-    except Exception as e:
-        print(f"[WARN] Eurostat annual bop (EXT_EU27_2020): {e}")
-
-    if trade_frames:
-        trade_df = pd.concat(trade_frames, ignore_index=True)
-    else:
         trade_df = pd.DataFrame(columns=["geo", "time", "trade_gdp"])
 
     # 3. Мерж
@@ -183,9 +187,11 @@ def fetch_eurostat_annual() -> pd.DataFrame:
     for f in frames[1:]:
         result = result.merge(f, on=["geo", "time"], how="outer")
 
-    result["country"] = result["geo"].map(GEO_TO_COUNTRY)
     result["date"] = result["time"].apply(_time_to_year_end)
-    result = result.dropna(subset=["date", "country"])
+    result = result.dropna(subset=["date"])
+    result = keep_period_geo(result, "geo", "date")
+    result["country"] = result["geo"].map(GEO_TO_COUNTRY)
+    result = result.dropna(subset=["country"])
 
     cols = ["date", "country", "debt_gdp", "budget_gdp", "trade_gdp"]
     for c in cols:
