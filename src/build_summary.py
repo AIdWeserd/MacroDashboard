@@ -418,6 +418,7 @@ def _set_inflation(row, source, cutoff, country, max_age_days=None):
         ("value", "inflation"),
         ("mom", "inflation_mom"),
         ("core", "inflation_core"),
+        ("core_mom", "inflation_core_mom"),
     ):
         if row.get(target_col) is not None or source_col not in sub.columns:
             continue
@@ -1028,6 +1029,7 @@ def build_summary(
                 "inflation",
                 "inflation_mom",
                 "inflation_core",
+                "inflation_core_mom",
         ):
             row[metric] = None
             row[f"{metric}_date"] = None

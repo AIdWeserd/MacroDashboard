@@ -7,3 +7,16 @@ data/
 *.log
 test_*.py
 weo_*.csv
+
+# Локальные SQLite и снимки для отката (не добавлять в Git)
+backups/
+backup_*/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Локальные конфигурации с секретами
+.env.*
+!.env.example

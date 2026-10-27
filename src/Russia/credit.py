@@ -4,13 +4,10 @@
 Не путать остатки задолженности с новыми выдачами кредитов.
 """
 from io import BytesIO
-import warnings
 
 import pandas as pd
 import requests
-from urllib3.exceptions import InsecureRequestWarning
 
-warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
 _BASE = "https://www.cbr.ru/vfs/statistics/BankSector/"
 SOURCES = {
@@ -40,7 +37,7 @@ def _load_credit_series(name: str, source: dict) -> pd.DataFrame:
         source["url"],
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=120,
-        verify=False,
+        verify=True,
     )
     response.raise_for_status()
     if not response.content.startswith(b"PK"):

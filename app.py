@@ -19,6 +19,9 @@ from src.snapshot import (
 )
 from src.fetch_forexfactory import fetch_calendar
 from src.charts import line_chart
+from src.eurostat_extra import load_eurostat_extra, enrich_summary, previous_published
+from src.summary_ui import (METRICS, KEY_BY_LABEL, FREQUENCY_BY_LABEL,
+                            sort_summary, make_forecast_table, compare_snapshot)
 
 st.set_page_config(page_title="Macro Dashboard", layout="wide")
 st.title("📈 Макро-дашборд")
@@ -43,6 +46,9 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
         ws = writer.sheets["Macro"]
         for row in ws.iter_rows():
             for cell in row:
+                # Источники данных не должны создавать формулы в выгрузке Excel.
+                if cell.data_type == "f" and isinstance(cell.value, str):
+                    cell.value = "'" + cell.value
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
 
         for col_cells in ws.columns:
@@ -58,7 +64,7 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 
 def to_html_bytes(df: pd.DataFrame) -> bytes:
-    html = df.to_html(index=False, escape=False, border=1, justify="center")
+    html = df.to_html(index=False, escape=True, border=1, justify="center")
     return html.encode("utf-8-sig")
 
 
@@ -70,11 +76,13 @@ def to_pdf_bytes(df: pd.DataFrame) -> bytes:
         return b""
 
     from datetime import datetime
+    from html import escape as escape_html
 
     df_html = df.copy()
+    df_html.columns = [escape_html(str(col), quote=True) for col in df_html.columns]
     for col in df_html.columns:
         df_html[col] = df_html[col].apply(
-            lambda x: str(x).replace("\n", "<br>") if pd.notna(x) else ""
+            lambda x: escape_html(str(x), quote=True).replace("\n", "<br>") if pd.notna(x) else ""
         )
 
     table_html = df_html.to_html(
@@ -286,78 +294,56 @@ selected_regions = st.pills(
 if not selected_regions:
     selected_regions = REGION_ORDER
 
+# Сортировка не меняет значения метрик. Для сортировки по ВВП
+# используем отдельный опубликованный номинальный ВВП IMF WEO.
+sort_mode = st.selectbox(
+    "Порядок стран",
+    ["Исходный порядок", "ВВП ↓", "ВВП ↑", "Страна А–Я"],
+    key="summary_sort_mode",
+)
 summary = build_summary(year=selected_year, month=selected_month)
+extra_official = load_eurostat_extra()
+summary = enrich_summary(summary, extra_official, selected_year, selected_month)
+summary_all_regions = summary.copy()
 
 if summary.empty:
     st.warning("Нет данных. Запусти: python scheduler.py")
 else:
     summary = summary[summary["region"].isin(selected_regions)].reset_index(drop=True)
+    summary, sort_explanation = sort_summary(summary, imf, sort_mode,
+                                             selected_year, now.year)
+    if sort_explanation:
+        st.caption(sort_explanation)
 
     previous = load_previous_snapshot()
     changed = compare_with_previous(summary, previous)
 
-    display = summary.copy()
+    display = summary.rename(columns={"country_name": "Страна"}).copy()
 
-    # Сливаем значение + дату в одну ячейку
-    display["Ставка ЦБ, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["policy_rate"], display["policy_rate_date"])
-    ]
-    display["Инфляция YoY, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["inflation"], display["inflation_date"])
-    ]
-    display["Инфляция MoM, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["inflation_mom"], display["inflation_mom_date"])
-    ]
-    display["Core CPI YoY, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["inflation_core"], display["inflation_core_date"])
-    ]
-    display["Рост ВВП, % YoY"] = [
-        merge_value_date(v, d) for v, d in zip(display["gdp_growth"], display["gdp_growth_date"])
-    ]
-    display["Безработица, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["unemployment"], display["unemployment_date"])
-    ]
-    display["Долг/ВВП, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["debt_gdp"], display["debt_gdp_date"])
-    ]
-    display["Бюджет/ВВП, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["budget_gdp"], display["budget_gdp_date"])
-    ]
-    display["Трейд/ВВП, %"] = [
-        merge_value_date(v, d) for v, d in zip(display["trade_gdp"], display["trade_gdp_date"])
-    ]
-
-    display = display.rename(columns={"country_name": "Страна"})
-
-    # Порядок колонок и фильтров — синхронный
-    METRIC_COLS = [
-        "Ставка ЦБ, %",
-        "Инфляция YoY, %",
-        "Инфляция MoM, %",
-        "Core CPI YoY, %",
-        "Рост ВВП, % YoY",
-        "Безработица, %",
-        "Долг/ВВП, %",
-        "Бюджет/ВВП, %",
-        "Трейд/ВВП, %",
-    ]
-
+    # Единицы и тип изменения вынесены в единый справочник.
+    # Это НЕ изменение методик в build_summary или SQLite.
+    METRIC_COLS = [m.label for m in METRICS]
+    metric_to_key = KEY_BY_LABEL
     selected_cols = st.pills(
         "Какие метрики показывать",
-        options=METRIC_COLS,
-        default=METRIC_COLS,
-        selection_mode="multi",
-        key="summary_cols_pills",
+        options=METRIC_COLS, default=METRIC_COLS,
+        selection_mode="multi", key="summary_cols_pills",
     )
     if not selected_cols:
         selected_cols = METRIC_COLS
 
+    # В ОСНОВНОЙ сводной значения и отчётные периоды всегда остаются
+    # в одной ячейке: разные метрики могут иметь разные периоды.
+    # Независимое представление «Таблица без дат» ниже сохраняется как есть.
     display_with_dates = display[["country", "Страна"]].copy()
-    for c in METRIC_COLS:
-        if c in selected_cols:
-            display_with_dates[c] = display[c]
+    for label in selected_cols:
+        key = metric_to_key[label]
+        dates = display.get(key + "_date", pd.Series([None] * len(display)))
+        values = display.get(key, pd.Series([None] * len(display)))
+        display_with_dates[label] = [
+            merge_value_date(v, d) for v, d in zip(values, dates)
+        ]
 
-    metric_to_key = {human: key for key, human in SUMMARY_METRICS}
     highlight_color_changed = "background-color: #fff3b0"
     highlight_color_bbg = "background-color: #ffcccc"
 
@@ -396,23 +382,19 @@ else:
 
     styled = display_with_dates.style.apply(highlight_row, axis=1)
 
+    summary_column_config = {
+        "country": None,
+        "Страна": st.column_config.TextColumn("Страна", width="small"),
+    }
+    for label in selected_cols:
+        summary_column_config[label] = st.column_config.TextColumn(
+            label, width="medium"
+        )
+
     st.dataframe(
         styled,
-        width='stretch',
-        hide_index=True,
-        column_config={
-            "country": None,
-            "Страна": st.column_config.TextColumn("Страна", width="small"),
-            "Ставка ЦБ, %": st.column_config.TextColumn("Ставка ЦБ, %", width="small"),
-            "Инфляция YoY, %": st.column_config.TextColumn("Инфляция YoY, %", width="small"),
-            "Инфляция MoM, %": st.column_config.TextColumn("Инфляция MoM, %", width="small"),
-            "Core CPI YoY, %": st.column_config.TextColumn("Core CPI YoY, %", width="small"),
-            "Рост ВВП, % YoY": st.column_config.TextColumn("Рост ВВП, % YoY", width="small"),
-            "Безработица, %": st.column_config.TextColumn("Безработица, %", width="small"),
-            "Долг/ВВП, %": st.column_config.TextColumn("Долг/ВВП, %", width="medium"),
-            "Бюджет/ВВП, %": st.column_config.TextColumn("Бюджет/ВВП, %", width="medium"),
-            "Трейд/ВВП, %": st.column_config.TextColumn("Трейд/ВВП, %", width="medium"),
-        },
+        width="stretch", hide_index=True,
+        column_config=summary_column_config,
     )
 
     bbg_count = len(bbg_set)
@@ -434,6 +416,16 @@ else:
 
     for p in parts:
         st.caption(p)
+
+    # Previous official release of newly added Eurostat series (not a weekly snapshot).
+    if st.toggle("Предыдущие опубликованные значения PPI и ВВП QoQ", value=False):
+        history = previous_published(extra_official, summary["country"].tolist(),
+                                     selected_year, selected_month)
+        if history.empty:
+            st.caption("Пока недостаточно официальных наблюдений для сравнения.")
+        else:
+            history["Страна"] = history["Страна"].map(COUNTRY_NAMES).fillna(history["Страна"])
+            st.dataframe(history, width="stretch", hide_index=True)
 
     # ============================================================
     # ВТОРАЯ ТАБЛИЦА — без дат
@@ -483,10 +475,12 @@ else:
 
     if selected_year_2 != selected_year or selected_month_2 != selected_month:
         summary_2 = build_summary(year=selected_year_2, month=selected_month_2)
+        summary_2 = enrich_summary(summary_2, extra_official, selected_year_2, selected_month_2)
     else:
-        summary_2 = summary
+        summary_2 = summary_all_regions.copy()
 
     summary_2 = summary_2[summary_2["region"].isin(selected_regions_2)].reset_index(drop=True)
+    summary_2, _ = sort_summary(summary_2, imf, sort_mode, selected_year_2, now.year)
 
     display_no_dates = summary_2[["country", "country_name"]].copy()
     display_no_dates = display_no_dates.rename(columns={"country_name": "Страна"})
@@ -567,6 +561,39 @@ else:
         "📅 **Сезонная корректировка:** большинство показателей — сезонно сглаженные (SA). "
         "Если в пометке указано `NSA` — данные без сезонной корректировки."
     )
+
+    # Прошлая НЕДЕЛЯ — отдельный объект, не предыдущий релиз CPI/ВВП.
+    with st.expander("📊 Сравнение с предыдущим недельным снимком"):
+        st.caption("Это сравнение с предыдущим сохранённым снимком Dashboard, "
+                   "а не с предыдущим месяцем или кварталом статистики.")
+        if previous.empty:
+            st.info("Нет более раннего недельного снимка.")
+        else:
+            compare_country = st.selectbox(
+                "Страна для сравнения",
+                summary["country"].tolist(),
+                format_func=lambda code: COUNTRY_NAMES.get(code, code),
+                key="snapshot_compare_country",
+            )
+            comparison = compare_snapshot(
+                summary[summary.country.eq(compare_country)], previous,
+                COUNTRY_NAMES, [m.key for m in METRICS],
+            )
+            if comparison.empty:
+                st.info("Нет наблюдений для сравнения.")
+            else:
+                st.dataframe(comparison, hide_index=True, width="stretch")
+
+    with st.expander("📈 Опубликованные годовые прогнозы IMF WEO"):
+        st.caption("Это самостоятельные опубликованные прогнозы IMF WEO. "
+                   "Не заменяют официальные месячные/квартальные данные; "
+                   "не рассчитываются из них. Прошедшие годы не помечаются прогнозом.")
+        forecast_year = max(now.year + 1, selected_year + 1)
+        forecast = make_forecast_table(imf, COUNTRY_NAMES, forecast_year)
+        if forecast.empty:
+            st.info(f"Прогнозов WEO за {forecast_year} год в локальной SQLite нет.")
+        else:
+            st.dataframe(forecast, hide_index=True, width="stretch")
 
 st.divider()
 
@@ -654,28 +681,69 @@ with st.expander("💰 Ставки ЦБ (исторические)", expanded=F
         )
 
 with st.expander("📅 Экономический календарь", expanded=False):
-    with st.spinner("Загружаю календарь..."):
+    # st.expander не откладывает выполнение кода. Запрашиваем ForexFactory
+    # только по действию пользователя, а не при каждом обновлении Streamlit.
+    if st.button("🔄 Обновить календарь ForexFactory", key="calendar_refresh"):
+        with st.spinner("Загружаю календарь..."):
+            try:
+                fresh_calendar = fetch_calendar()
+                if fresh_calendar is not None and not fresh_calendar.empty:
+                    st.session_state["calendar_live"] = fresh_calendar
+                    st.success("Календарь обновлён")
+                else:
+                    st.warning("Источник не вернул событий. Сохранённые данные не затронуты.")
+            except Exception:
+                # Сторонний сервис может отвечать HTTP 403. Его исключения
+                # не должны раскрывать служебные URL и ломать сводную таблицу.
+                st.warning("Календарь ForexFactory временно недоступен. Остальные разделы работают.")
+
+    cal = st.session_state.get("calendar_live")
+    from_storage = cal is None or cal.empty
+    if from_storage:
         try:
-            cal = fetch_calendar()
-        except Exception as e:
-            st.error(f"Ошибка: {e}")
+            cal = load_forexfactory()
+        except Exception:
+            st.warning("Не удалось прочитать сохранённый календарь.")
             cal = pd.DataFrame()
 
-    if not cal.empty:
-        min_imp = st.slider("Мин. важность", 1, 3, 2, key="cal_imp")
-        filtered = cal[cal["importance"] >= min_imp]
-        st.caption(f"Событий: {len(filtered)}")
-        for _, row in filtered.head(30).iterrows():
-            dt = row["datetime"].strftime("%Y-%m-%d %H:%M")
-            stars = "⭐" * int(row["importance"])
-            actual = row.get("actual") or "—"
-            forecast = row.get("forecast") or "—"
-            previous = row.get("previous") or "—"
-            st.markdown(
-                f"**{dt} — {row['country']} — {row['event']}** {stars}  \n"
-                f"Actual: `{actual}` | Forecast: `{forecast}` | Previous: `{previous}`"
+    if cal is not None and not cal.empty:
+        cal = cal.copy()
+        if "datetime" not in cal.columns or "importance" not in cal.columns:
+            st.warning("В сохранённом календаре отсутствуют обязательные столбцы.")
+        else:
+            cal["datetime"] = pd.to_datetime(cal["datetime"], utc=True, errors="coerce")
+            cal["importance"] = pd.to_numeric(cal["importance"], errors="coerce").fillna(0).astype(int)
+            invalid_dates = int(cal["datetime"].isna().sum())
+            cal = cal.dropna(subset=["datetime"])
+            if invalid_dates:
+                st.warning(f"Пропущено событий с некорректной датой: {invalid_dates}")
+            if from_storage:
+                st.caption("Показаны ранее сохранённые события; они могут быть устаревшими.")
+            min_imp = st.slider("Мин. важность", 1, 3, 2, key="cal_imp")
+            filtered = cal[cal["importance"] >= min_imp].sort_values(
+                ["datetime", "importance"], ascending=[True, False]
             )
-            st.divider()
+            st.caption(f"Событий: {len(filtered)}")
+
+            def _calendar_text(value):
+                if value is None or pd.isna(value):
+                    return "—"
+                text = str(value).strip()
+                return text if text else "—"
+
+            for _, row in filtered.head(30).iterrows():
+                dt = row["datetime"].strftime("%Y-%m-%d %H:%M UTC")
+                stars = "⭐" * int(row["importance"])
+                actual = _calendar_text(row.get("actual"))
+                forecast = _calendar_text(row.get("forecast"))
+                previous = _calendar_text(row.get("previous"))
+                st.markdown(
+                    f"**{dt} — {_calendar_text(row.get('country'))} — {_calendar_text(row.get('event'))}** {stars}  \n"
+                    f"Actual: `{actual}` | Forecast: `{forecast}` | Previous: `{previous}`"
+                )
+                st.divider()
+    else:
+        st.caption("Календарь пока не загружен. Для запроса нажми кнопку выше.")
 
 with st.expander("📊 FRED (исторические ряды)", expanded=False):
     macro = load_fred()
@@ -692,10 +760,36 @@ with st.expander("📊 FRED (исторические ряды)", expanded=False
 with st.expander("📰 Новости", expanded=False):
     news = load_rss()
     if not news.empty:
+        from html import escape as escape_html
+        from urllib.parse import urlsplit
+
         for _, row in news.head(20).iterrows():
+            title = escape_html(str(row.get("title") or ""), quote=True)
+            source = escape_html(str(row.get("source") or ""), quote=True)
+            raw_link = str(row.get("link") or "").strip()
+            try:
+                link_parts = urlsplit(raw_link)
+                valid_link = (
+                    link_parts.scheme.lower() in {"http", "https"}
+                    and bool(link_parts.hostname)
+                    and not any(char.isspace() for char in raw_link)
+                )
+            except ValueError:
+                valid_link = False
+            title_html = (
+                f'<a href="{escape_html(raw_link, quote=True)}" '
+                f'rel="noopener noreferrer" target="_blank">{title}</a>'
+                if valid_link else title
+            )
+            published = row.get("published")
+            published_text = (
+                published.strftime("%Y-%m-%d %H:%M")
+                if pd.notna(published) and hasattr(published, "strftime")
+                else str(published or "")
+            )
             st.markdown(
-                f"**[{row['title']}]({row['link']})**  \n"
-                f"<small>{row['source']} — {row['published']:%Y-%m-%d %H:%M}</small>",
+                f"<strong>{title_html}</strong>  \n"
+                f"<small>{source} — {escape_html(published_text, quote=True)}</small>",
                 unsafe_allow_html=True,
             )
             st.divider()

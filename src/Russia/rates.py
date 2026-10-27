@@ -5,13 +5,10 @@
 """
 from io import BytesIO
 import re
-import warnings
 
 import pandas as pd
 import requests
-from urllib3.exceptions import InsecureRequestWarning
 
-warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
 BASE_URL = "https://www.cbr.ru/vfs/statistics/pdko/int_rat/"
 MONTHS = {
@@ -26,7 +23,7 @@ def _download_table(filename: str) -> pd.DataFrame:
         BASE_URL + filename,
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=120,
-        verify=False,
+        verify=True,
     )
     response.raise_for_status()
     if not response.content.startswith(b"PK"):

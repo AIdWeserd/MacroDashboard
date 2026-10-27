@@ -2,6 +2,7 @@ import time
 import requests
 import pandas as pd
 from config import FRED_API_KEY
+from src.fred_safety import safe_source_error
 
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -41,8 +42,8 @@ def _fetch_one(country: str, series_id: str, max_retries: int = 3) -> pd.DataFra
             df["indicator"] = "UNEMPLOYMENT_FRED"
             return df.dropna()
 
-        except Exception as e:
-            print(f"[RETRY {attempt}/{max_retries}] FRED unemployment {country}: {e}")
+        except Exception as exc:
+            print(f"[RETRY {attempt}/{max_retries}] FRED unemployment {country}: {safe_source_error(exc)}")
             if attempt < max_retries:
                 time.sleep(5)
             else:
@@ -56,13 +57,19 @@ def fetch_fred_unemployment() -> pd.DataFrame:
     С retry на таймауты.
     """
     frames = []
+    issues = []
     for country, series_id in FRED_UNEMPLOYMENT_SERIES.items():
         df = _fetch_one(country, series_id)
-        if not df.empty:
-            frames.append(df)
-            print(f"[OK] FRED unemployment {country} ({series_id}): {len(df)} строк")
+        if df is None or df.empty:
+            issues.append(f"{country}/{series_id}")
+            continue
+        frames.append(df)
+        print(f"[OK] FRED unemployment {country} ({series_id}): {len(df)} строк")
 
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    result = (pd.concat(frames, ignore_index=True) if frames else
+              pd.DataFrame(columns=["date", "value", "country", "indicator"]))
+    result.attrs["source_issues"] = tuple(issues)
+    return result
 
 
 if __name__ == "__main__":

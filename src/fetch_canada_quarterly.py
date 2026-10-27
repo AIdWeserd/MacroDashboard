@@ -1,93 +1,262 @@
+
 import time
-import requests
+
 import pandas as pd
+import requests
+
+
+BASE = "https://www150.statcan.gc.ca/t1/wds/rest"
+START_DATE = pd.Timestamp("2020-01-01")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
     "Accept": "application/json",
     "Content-Type": "application/json",
 }
 
-BASE = "https://www150.statcan.gc.ca/t1/wds/rest"
-
-START_DATE = pd.Timestamp("2024-01-01")
-
-# (productId, coordinate, колонка)
+# Исходные координаты официальных рядов сохранены.
 SERIES = {
-    "gdp_cad_mn": (36100104, "1.2.1.30.0.0.0.0.0.0"),  # GDP, Current prices, SAAR
-    "debt_cad_mn": (36100467, "1.1.0.0.0.0.0.0.0.0"),  # Gross debt
-    "budget_cad_mn": (36100118, "1.2.1.74.0.0.0.0.0.0"),  # Net lending/borrowing, Unadjusted
-    "ca_cad_mn": (36100018, "1.3.1.0.0.0.0.0.0.0"),  # Current Account Balance, SA
+    "gdp_cad_mn": (
+        36100104,
+        "1.2.1.30.0.0.0.0.0.0",
+    ),
+    "debt_cad_mn": (
+        36100467,
+        "1.1.0.0.0.0.0.0.0.0",
+    ),
+    "budget_cad_mn": (
+        36100118,
+        "1.2.1.74.0.0.0.0.0.0",
+    ),
+    "ca_cad_mn": (
+        36100018,
+        "1.3.1.0.0.0.0.0.0.0",
+    ),
 }
 
 
-def _get_points(product_id: int, coordinate: str, latest_n: int = 20,
-                retries: int = 3) -> pd.DataFrame:
-    url = f"{BASE}/getDataFromCubePidCoordAndLatestNPeriods"
-    payload = [{
-        "productId": product_id,
-        "coordinate": coordinate,
-        "latestN": latest_n,
-    }]
-    last_err = None
+def _quarters_to_request() -> int:
+    """Динамическая глубина с начала 2020 года."""
+    current = pd.Timestamp.now().to_period("Q")
+    start = START_DATE.to_period("Q")
+
+    return max(
+        1,
+        current.ordinal - start.ordinal + 5,
+    )
+
+
+def _get_points(
+    product_id: int,
+    coordinate: str,
+    latest_n: int = None,
+    retries: int = 3,
+) -> pd.DataFrame:
+    url = (
+        f"{BASE}/"
+        "getDataFromCubePidCoordAndLatestNPeriods"
+    )
+
+    payload = [
+        {
+            "productId": product_id,
+            "coordinate": coordinate,
+            "latestN": (
+                latest_n
+                if latest_n is not None
+                else _quarters_to_request()
+            ),
+        }
+    ]
+
+    last_error = None
+
     for attempt in range(retries):
         try:
-            r = requests.post(url, headers=HEADERS, json=payload, timeout=90)
-            r.raise_for_status()
-            data = r.json()
-            if not (isinstance(data, list) and data):
-                return pd.DataFrame()
-            obj = data[0].get("object", {})
-            points = obj.get("vectorDataPoint", [])
+            response = requests.post(
+                url,
+                headers=HEADERS,
+                json=payload,
+                timeout=90,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+
+            if not (
+                isinstance(data, list)
+                and data
+            ):
+                raise ValueError(
+                    "Неожиданный формат StatCan"
+                )
+
+            if data[0].get("status") != "SUCCESS":
+                raise ValueError(
+                    "Неуспешный статус StatCan"
+                )
+
+            obj = data[0].get("object") or {}
+
+            if not isinstance(obj, dict):
+                raise ValueError(
+                    "Некорректный объект StatCan"
+                )
+
+            points = obj.get(
+                "vectorDataPoint", []
+            )
+
             if not points:
-                return pd.DataFrame()
+                return pd.DataFrame(
+                    columns=["date", "value"]
+                )
+
             rows = []
-            for p in points:
+
+            for point in points:
                 try:
-                    ts = pd.Timestamp(p["refPer"])
-                    val = float(p["value"]) if p.get("value") not in (None, "") else None
-                except (ValueError, TypeError, KeyError):
+                    date = pd.Timestamp(
+                        point["refPer"]
+                    )
+
+                    value = pd.to_numeric(
+                        point.get("value"),
+                        errors="coerce",
+                    )
+
+                except (
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                ):
                     continue
-                rows.append({"date": ts, "value": val})
-            return pd.DataFrame(rows).dropna().sort_values("date").reset_index(drop=True)
-        except Exception as e:
-            last_err = e
-            if attempt < retries - 1:
+
+                rows.append(
+                    {
+                        "date": date,
+                        "value": value,
+                    }
+                )
+
+            if not rows:
+                return pd.DataFrame(
+                    columns=["date", "value"]
+                )
+
+            return (
+                pd.DataFrame(rows)
+                .dropna()
+                .drop_duplicates("date", keep="last")
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
+
+        except (
+            requests.RequestException,
+            ValueError,
+            TypeError,
+        ) as exc:
+            last_error = exc
+
+            if attempt + 1 < retries:
                 time.sleep(2 ** attempt)
-    raise RuntimeError(f"StatCan не ответил по {product_id}/{coordinate}: {last_err}")
+
+    raise RuntimeError(
+        f"StatCan {product_id}: запрос не выполнен "
+        f"({type(last_error).__name__})"
+    ) from None
 
 
 def fetch_canada_quarterly() -> pd.DataFrame:
     """
-    Квартальные метрики Канады из StatCan WDS.
+    Квартальные показатели Канады.
 
-    - debt_gdp   = Gross Debt / GDP (SAAR) × 100
-    - budget_gdp = Net Lending/Borrowing (Unadjusted, quarterly) / (GDP / 4) × 100
-    - trade_gdp  = Current Account Balance / (GDP / 4) × 100
+    Формулы debt_gdp, budget_gdp и trade_gdp
+    сохранены из исходной версии.
     """
     frames = {}
-    for col, (pid, coord) in SERIES.items():
-        df = _get_points(pid, coord, latest_n=20)
+
+    for column, (product_id, coordinate) in SERIES.items():
+        df = _get_points(
+            product_id,
+            coordinate,
+        )
+
         if df.empty:
-            print(f"[WARN] Canada {col}: пусто")
+            print(
+                f"[WARN] Canada {column}: пусто"
+            )
             return pd.DataFrame()
-        df = df.rename(columns={"value": col})
-        frames[col] = df
+
+        frames[column] = df.rename(
+            columns={"value": column}
+        )
 
     result = frames["gdp_cad_mn"]
-    for col in ["debt_cad_mn", "budget_cad_mn", "ca_cad_mn"]:
-        result = result.merge(frames[col], on="date", how="inner")
 
-    # GDP в SAAR — для бюджета и трейда переводим в квартальное значение (÷ 4)
-    result["gdp_q_cad_mn"] = result["gdp_cad_mn"] / 4
+    for column in (
+        "debt_cad_mn",
+        "budget_cad_mn",
+        "ca_cad_mn",
+    ):
+        result = result.merge(
+            frames[column],
+            on="date",
+            how="inner",
+        )
 
-    result["debt_gdp"] = result["debt_cad_mn"] / result["gdp_cad_mn"] * 100
-    result["budget_gdp"] = result["budget_cad_mn"] / result["gdp_q_cad_mn"] * 100
-    result["trade_gdp"] = result["ca_cad_mn"] / result["gdp_q_cad_mn"] * 100
+    # Проверенные ранее формулы не меняем.
+    result["gdp_q_cad_mn"] = (
+        result["gdp_cad_mn"] / 4
+    )
+
+    result["debt_gdp"] = (
+        result["debt_cad_mn"]
+        / result["gdp_cad_mn"]
+        * 100
+    )
+
+    result["budget_gdp"] = (
+        result["budget_cad_mn"]
+        / result["gdp_q_cad_mn"]
+        * 100
+    )
+
+    result["trade_gdp"] = (
+        result["ca_cad_mn"]
+        / result["gdp_q_cad_mn"]
+        * 100
+    )
 
     result["country"] = "CA"
-    result = result[result["date"] >= START_DATE].reset_index(drop=True)
 
-    return result[["date", "country", "debt_gdp", "budget_gdp", "trade_gdp"]]
+    current_quarter = (
+        pd.Timestamp.now().to_period("Q")
+    )
+
+    result = result[
+        (result["date"] >= START_DATE)
+        & (
+            result["date"].dt.to_period("Q")
+            < current_quarter
+        )
+    ]
+
+    return (
+        result[
+            [
+                "date",
+                "country",
+                "debt_gdp",
+                "budget_gdp",
+                "trade_gdp",
+            ]
+        ]
+        .sort_values("date")
+        .reset_index(drop=True)
+    )

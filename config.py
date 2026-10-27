@@ -1,3 +1,4 @@
+
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ DB_PATH = DATA_DIR / "macro.db"
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 ESTAT_APP_ID = os.getenv("ESTAT_APP_ID", "")
 BEA_API_KEY = os.getenv("BEA_API_KEY", "")
+BLS_API_KEY = os.getenv("BLS_API_KEY", "")
 
 # Страны, которые отслеживаем (код -> полное имя)
 COUNTRIES = {

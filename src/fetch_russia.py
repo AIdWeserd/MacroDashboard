@@ -592,28 +592,39 @@ RU_BOP_URL = (
 RU_FX_URL = "https://www.cbr.ru/scripts/XML_dynamic.asp"
 
 
+# Временное исключение TLS для двух официальных XLSX-хостов.
+# На Windows пользователя сертификаты этих серверов не проходят проверку.
+# Не расширять список без отдельного анализа. Риск подмены данных сохраняется.
+_RU_TLS_EXCEPTION_HOSTS = frozenset({
+    "rosstat.gov.ru", "www.rosstat.gov.ru",
+    "roskazna.gov.ru", "www.roskazna.gov.ru",
+})
+_RU_TLS_LOGGED_HOSTS = set()
+
+
 def _ru_download(url, params=None):
     last_error = None
+    host = (urlparse(url).hostname or "").lower()
+    is_tls_exception = host in _RU_TLS_EXCEPTION_HOSTS
+    # ЦБ РФ и все остальные адреса — только с проверкой сертификата.
+    verify_certificate = not is_tls_exception
+
+    if is_tls_exception and host not in _RU_TLS_LOGGED_HOSTS:
+        print(f"[TLS EXCEPTION] {host}: временно verify=False (Росстат/Казначейство)")
+        _RU_TLS_LOGGED_HOSTS.add(host)
 
     for attempt in range(4):
         try:
-            # Временный обход TLS-проблемы на Windows.
             with warnings.catch_warnings():
-                warnings.simplefilter(
-                    "ignore",
-                    InsecureRequestWarning,
-                )
-
+                if is_tls_exception:
+                    warnings.simplefilter("ignore", InsecureRequestWarning)
                 result = requests.get(
                     url,
                     params=params,
-                    headers={
-                        "User-Agent": "Mozilla/5.0"
-                    },
-                    verify=False,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    verify=verify_certificate,
                     timeout=(25, 90),
                 )
-
             result.raise_for_status()
             return result.content
 
@@ -625,13 +636,10 @@ def _ru_download(url, params=None):
                 time.sleep(2 * (attempt + 1))
         except requests.RequestException as exc:
             last_error = exc
-
             if attempt < 3:
                 time.sleep(2 * (attempt + 1))
 
-    raise RuntimeError(
-        f"Ошибка загрузки {url}: {last_error}"
-    )
+    raise RuntimeError(f"Ошибка загрузки {url}: {last_error}")
 
 
 def _ru_excel(url, sheet):

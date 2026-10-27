@@ -20,6 +20,7 @@ SUMMARY_METRICS = [
     ("inflation", "Инфляция YoY, %"),
     ("inflation_mom", "Инфляция MoM, %"),
     ("inflation_core", "Core CPI YoY, %"),
+    ("inflation_core_mom", "Core HICP MoM, %"),
     ("unemployment", "Безработица, %"),
     ("debt_gdp", "Долг/ВВП, %"),
     ("budget_gdp", "Бюджет/ВВП, %"),

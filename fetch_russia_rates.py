@@ -1,15 +1,9 @@
 import re
-import warnings
 from io import BytesIO
 
 import pandas as pd
 import requests
-from urllib3.exceptions import InsecureRequestWarning
 
-warnings.filterwarnings(
-    "ignore",
-    category=InsecureRequestWarning,
-)
 
 BASE_URL = (
     "https://www.cbr.ru/vfs/statistics/"
@@ -41,7 +35,7 @@ def _download_rates_table(filename):
             "User-Agent": "Mozilla/5.0",
         },
         timeout=120,
-        verify=False,
+        verify=True,
     )
 
     response.raise_for_status()

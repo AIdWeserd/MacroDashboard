@@ -21,6 +21,7 @@ COUNTRY_TO_WEO = {
     "TR": "TUR",
     "CH": "CHE",
     "KZ": "KAZ",
+    "RU": "RUS",  # только размер ВВП, не менять резервные макропоказатели РФ
 }
 
 # Наш код метрики -> код концепта IMF WEO
@@ -30,6 +31,7 @@ IMF_CONCEPTS = {
     "TRADE_GDP": "BCA_NGDPD",
     "GDP_GROWTH": "NGDP_RPCH",
     "INFLATION": "PCPIPCH",
+    "GDP_USD_BN": "NGDPD",  # Номинальный ВВП, млрд USD; ТОЛЬКО для ранжирования
 }
 
 
@@ -69,6 +71,9 @@ def fetch_all_imf() -> pd.DataFrame:
 
     df["country"] = df["country_weo"].map(weo_to_country)
     df["metric"] = df["metric_weo"].map(concept_to_metric)
+
+    # Существующие IMF fallback для РФ не меняем: добавляем только GDP ranking.
+    df = df[(df["country"] != "RU") | (df["metric"] == "GDP_USD_BN")].copy()
 
     # Числа
     df["year"] = pd.to_numeric(df["year"], errors="coerce")

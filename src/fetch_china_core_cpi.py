@@ -50,7 +50,8 @@ def _find_cpi_releases(max_pages: int = 5) -> list[tuple[str, str]]:
         if page == 1:
             url = NBS_LIST_URL
         else:
-            url = f"{NBS_LIST_URL}index_{page}.html"
+            # После корневой страницы NBS идёт index_1.html, а не index_2.html.
+            url = f"{NBS_LIST_URL}index_{page - 1}.html"
 
         html = _fetch_html(url)
         if not html:
@@ -73,8 +74,8 @@ def _find_cpi_releases(max_pages: int = 5) -> list[tuple[str, str]]:
                     releases.append((text, href))
                     found += 1
 
-        if found == 0 and page > 1:
-            break
+        # На соседней странице может не оказаться CPI-статей, поэтому
+        # продолжаем просмотр до max_pages, не пропуская более старые релизы.
 
     return releases
 

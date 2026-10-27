@@ -1,14 +1,11 @@
 """Официальные месячные денежные агрегаты ЦБ РФ (уровни, млрд рублей)."""
 from io import BytesIO
 from datetime import datetime, date
-import warnings
 
 import pandas as pd
 import requests
 from openpyxl import load_workbook
-from urllib3.exceptions import InsecureRequestWarning
 
-warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 SOURCE = "https://www.cbr.ru/vfs/statistics/credit_statistics/monetary_agg.xlsx"
 SHEET = "Денежные агрегаты"
 LABELS = {
@@ -74,7 +71,7 @@ def parse_russia_money_xlsx(content: bytes) -> pd.DataFrame:
 def fetch_russia_money() -> pd.DataFrame:
     """Скачать официальную обновляемую таблицу ЦБ РФ."""
     print("[RU MONEY] Загружаем денежные агрегаты ЦБ РФ...")
-    response = requests.get(SOURCE, headers={"User-Agent": "Mozilla/5.0"}, timeout=120, verify=False)
+    response = requests.get(SOURCE, headers={"User-Agent": "Mozilla/5.0"}, timeout=120, verify=True)
     response.raise_for_status()
     if not response.content.startswith(b"PK"):
         raise ValueError("[RU MONEY] Источник вернул не XLSX")

@@ -1,14 +1,11 @@
 """Автоматическая загрузка шести ипотечных показателей Банка России."""
 
 from io import BytesIO
-import warnings
 
 import pandas as pd
 import requests
-from urllib3.exceptions import InsecureRequestWarning
 
 
-warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
 SOURCE_URL = (
     "https://www.cbr.ru/vfs/statistics/BankSector/Mortgage/"
@@ -34,7 +31,7 @@ def fetch_russia_mortgage() -> pd.DataFrame:
         SOURCE_URL,
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=120,
-        verify=False,
+        verify=True,
     )
     response.raise_for_status()
 
