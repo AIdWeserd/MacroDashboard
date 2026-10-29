@@ -604,3 +604,17 @@ def load_russia_quarterly() -> pd.DataFrame:
         "russia_quarterly",
         parse_dates=["date"],
     )
+
+
+# Shared official-series facade. The physical table remains
+# official_eurostat_extra for backward compatibility; no migration.
+def load_official_extra() -> pd.DataFrame:
+    """Read all published supplemental observations, including national PPI."""
+    from src.eurostat_extra import load_eurostat_extra
+    return load_eurostat_extra()
+
+
+def save_official_extra(data: pd.DataFrame) -> None:
+    """Upsert extra official observations by (country, date, metric)."""
+    from src.eurostat_extra import save_eurostat_extra
+    save_eurostat_extra(data)

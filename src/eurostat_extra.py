@@ -110,6 +110,11 @@ SERIES = {
 }
 
 
+# This table also stores national official quarterly PPI for Australia.
+# Do not add ppi_qoq to SERIES: SERIES contains only *Eurostat API* feeds.
+DISPLAY_METRICS = frozenset((*SERIES, "ppi_qoq"))
+
+
 def fetch_eurostat_extra(
     metric: str,
 ) -> pd.DataFrame:
@@ -380,7 +385,7 @@ def save_eurostat_extra(
 
     if not set(
         source.metric
-    ).issubset(SERIES):
+    ).issubset(DISPLAY_METRICS):
         raise ValueError(
             "Unknown metric: refusing write"
         )
@@ -518,29 +523,40 @@ def load_eurostat_extra() -> pd.DataFrame:
     )
 
 
-def _source_short(
-    source: str,
-) -> str:
-    """Use the real publisher instead of assuming Eurostat."""
+def _source_short(source: str) -> str:
+    """Короткое имя источника для сводной таблицы."""
+    raw = str(source or "").strip()
+    key = raw.casefold()
 
-    source = str(source)
+    for beginning, label in (
+        ("eurostat/", "Eurostat"),
+        ("росстат", "Росстат"),
+        ("oea/dpiit", "OEA"),
+        ("abs 6427", "ABS"),
+        ("bls/", "BLS"),
+        ("boj/", "BoJ"),
+        ("nbs china/", "NBS"),
+        ("ons/", "ONS"),
+        ("ibge/", "IBGE"),
+        ("statistics canada", "StatCan"),
+        ("tcmb/", "TCMB"),
+        ("un statistics division/", "UN MBS"),
+        ("singstat dos", "SingStat"),
+    ):
+        if key.startswith(beginning):
+            return label
 
-    if source.startswith("Eurostat/"):
-        return "Eurostat"
+    return raw or "источник не указан"
 
-    if source == "BLS/Final Demand":
-        return "BLS, Final Demand"
-
-    if source == "BoJ/CGPI":
-        return "BoJ, CGPI"
-
-    return source or "источник не указан"
 
 
 def _series_description(
     metric: str,
     source: str,
 ) -> str:
+    if metric == "ppi_qoq":
+        return "PPI QoQ, % (ABS, Австралия)"
+
     if metric in (
         "ppi_yoy", "ppi_mom"
     ):
@@ -569,16 +585,14 @@ def enrich_summary(
     year: int,
     month: int,
 ) -> pd.DataFrame:
-    """Add supplemental indicators without changing existing ones."""
-
+    """Добавить официальные показатели с короткими подписями."""
     result = summary.copy()
 
     cutoff = pd.Period(
-        f"{year}-{month:02d}",
-        freq="M",
+        f"{year}-{month:02d}", freq="M"
     ).end_time.normalize()
 
-    for metric in SERIES:
+    for metric in DISPLAY_METRICS:
         result[metric] = None
         result[f"{metric}_date"] = None
 
@@ -586,7 +600,7 @@ def enrich_summary(
         return result
 
     eligible = extra.loc[
-        extra.date.le(cutoff)
+        pd.to_datetime(extra["date"]).le(cutoff)
     ].sort_values("date")
 
     latest = eligible.drop_duplicates(
@@ -594,45 +608,54 @@ def enrich_summary(
         keep="last",
     )
 
-    for obs in latest.itertuples(
-        index=False
-    ):
-        if obs.metric not in SERIES:
+    for obs in latest.itertuples(index=False):
+        if obs.metric not in DISPLAY_METRICS:
             continue
 
-        mask = result.country.eq(
-            obs.country
-        )
-
+        mask = result["country"].eq(obs.country)
         if not mask.any():
             continue
 
-        date = pd.Timestamp(
-            obs.date
+        date = pd.Timestamp(obs.date)
+        source = str(obs.source)
+        adjustment = str(obs.adjustment)
+
+        quarterly = (
+            obs.metric in ("gdp_qoq", "ppi_qoq")
+            or (
+                obs.country == "AU"
+                and obs.metric == "ppi_yoy"
+                and (
+                    source.casefold().startswith("abs 6427")
+                    or "quarterly" in adjustment.casefold()
+                )
+            )
         )
 
-        label = (
+        period = (
             f"Q{date.quarter} {date.year}"
-            if obs.metric == "gdp_qoq"
+            if quarterly
             else f"{MONTHS[date.month]} {date.year}"
         )
 
-        result.loc[
-            mask, obs.metric
-        ] = round(
-            float(obs.value),
-            2,
+        publisher = _source_short(source)
+
+        provenance = (
+            publisher
+            if obs.metric.startswith("ppi_")
+            else f"{publisher}, {adjustment}"
         )
 
-        result.loc[
-            mask, f"{obs.metric}_date"
-        ] = (
-            f"{label} "
-            f"({_source_short(obs.source)}, "
-            f"{obs.adjustment})"
+        result.loc[mask, obs.metric] = round(
+            float(obs.value), 2
+        )
+
+        result.loc[mask, f"{obs.metric}_date"] = (
+            f"{period} ({provenance})"
         )
 
     return result
+
 
 
 def previous_published(
@@ -672,7 +695,7 @@ def previous_published(
     for (country, metric), x in frame.groupby(
         ["country", "metric"]
     ):
-        if metric not in SERIES:
+        if metric not in DISPLAY_METRICS:
             continue
 
         x = (

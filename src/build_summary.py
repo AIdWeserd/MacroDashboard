@@ -24,7 +24,7 @@ from src.storage import (
     load_us_quarterly, load_us_annual_bea,
     load_bloomberg, load_china_core_cpi,
     load_china_debt_fred, load_russia_cpi,
-    load_russia_quarterly,
+    load_russia_quarterly, load_official_extra,
 )
 
 COUNTRY_ORDER = [
@@ -1394,5 +1394,14 @@ def build_summary(
 
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    # Single public summary contract: also used by snapshots and the UI.
+    # Supplemental PPI and GDP QoQ are read through src.storage.
+    # This does not overwrite the primary indicators or IMF fallback.
+    from src.eurostat_extra import enrich_summary
+    return enrich_summary(
+        pd.DataFrame(rows),
+        load_official_extra(),
+        year,
+        month,
+    )
 

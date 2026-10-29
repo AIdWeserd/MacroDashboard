@@ -8,6 +8,7 @@ from src.storage import (
     load_eurostat, load_eurostat_unemployment,
     load_policy_rates,
     load_bloomberg,
+    load_official_extra,
 )
 from src.build_summary import (
     build_summary, COUNTRY_NAMES, MONTH_NAMES,
@@ -19,7 +20,7 @@ from src.snapshot import (
 )
 from src.fetch_forexfactory import fetch_calendar
 from src.charts import line_chart
-from src.eurostat_extra import load_eurostat_extra, enrich_summary, previous_published
+from src.eurostat_extra import previous_published
 from src.summary_ui import (METRICS, KEY_BY_LABEL, FREQUENCY_BY_LABEL,
                             sort_summary, make_forecast_table, compare_snapshot)
 
@@ -302,8 +303,9 @@ sort_mode = st.selectbox(
     key="summary_sort_mode",
 )
 summary = build_summary(year=selected_year, month=selected_month)
-extra_official = load_eurostat_extra()
-summary = enrich_summary(summary, extra_official, selected_year, selected_month)
+# Additional official series are now already included by build_summary.
+# We load these only for the "previous published observation" table.
+extra_official = load_official_extra()
 summary_all_regions = summary.copy()
 
 if summary.empty:
@@ -475,7 +477,6 @@ else:
 
     if selected_year_2 != selected_year or selected_month_2 != selected_month:
         summary_2 = build_summary(year=selected_year_2, month=selected_month_2)
-        summary_2 = enrich_summary(summary_2, extra_official, selected_year_2, selected_month_2)
     else:
         summary_2 = summary_all_regions.copy()
 

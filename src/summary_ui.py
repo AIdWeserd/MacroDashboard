@@ -56,6 +56,11 @@ METRICS = (
         "Европа: промышленный PPI, NSA; США: Final Demand, SA; Япония: CGPI, NSA",
     ),
     Metric(
+        "ppi_qoq",
+        "PPI QoQ, % (Австралия)",
+        "Квартальный PPI, ABS Final demand excluding exports, original; не MoM",
+    ),
+    Metric(
         "gdp_growth",
         "Реальный ВВП YoY, %",
         "Годовое изменение объёма ВВП или годовой IMF WEO при fallback; период указан у значения",
