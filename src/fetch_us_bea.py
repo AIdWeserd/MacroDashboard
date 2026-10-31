@@ -119,6 +119,8 @@ def fetch_us_current_account() -> pd.DataFrame:
 
     rows = _get(params)["BEAAPI"]["Results"]["Data"]
     df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=["date", "trade_usd_mn"])
 
     df["date"] = df["TimePeriod"].map(_parse_time_period)
 
@@ -350,10 +352,9 @@ def fetch_us_general_gov_annual() -> pd.DataFrame:
 
     debt = fetch_us_general_gov_debt_annual()
 
-    if debt.empty:
-        raise RuntimeError(
-            "US General Gov: годовая серия долга FRED недоступна"
-        )
+    debt_unavailable = debt.empty
+    if debt_unavailable:
+        debt = pd.DataFrame(columns=["date", "debt_gdp"])
 
     debt = debt[
         ["date", "debt_gdp"]
@@ -363,7 +364,7 @@ def fetch_us_general_gov_annual() -> pd.DataFrame:
 
     df["country"] = "US"
 
-    return (
+    result = (
         df[
             [
                 "date",
@@ -377,6 +378,14 @@ def fetch_us_general_gov_annual() -> pd.DataFrame:
         .sort_values("date")
         .reset_index(drop=True)
     )
+    issues = []
+    if ca.empty:
+        issues.append("годовой текущий счёт BEA недоступен")
+    if debt_unavailable:
+        issues.append("годовая серия долга FRED недоступна")
+    if issues:
+        result.attrs["source_issues"] = tuple(issues)
+    return result
 
 
 if __name__ == "__main__":

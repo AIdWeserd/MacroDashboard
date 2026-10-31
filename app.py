@@ -73,8 +73,7 @@ def to_pdf_bytes(df: pd.DataFrame) -> bytes:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("[PDF] Playwright не установлен.")
-        return b""
+        raise RuntimeError("PDF недоступен: установите Playwright и Chromium по README.md") from None
 
     from datetime import datetime
     from html import escape as escape_html
@@ -162,9 +161,8 @@ def to_pdf_bytes(df: pd.DataFrame) -> bytes:
             )
             browser.close()
         return pdf_bytes
-    except Exception as e:
-        print(f"[PDF] Ошибка Playwright: {e}")
-        return b""
+    except Exception:
+        raise RuntimeError("Не удалось создать PDF. Проверьте установку Chromium по README.md") from None
 
 
 # ============================================================
@@ -542,12 +540,17 @@ else:
         data = to_html_bytes(export_df)
         mime, ext = "text/html", "html"
     else:
-        data = to_pdf_bytes(export_df)
+        try:
+            data = to_pdf_bytes(export_df)
+        except RuntimeError as exc:
+            st.error(str(exc))
+            data = None
         mime, ext = "application/pdf", "pdf"
 
     st.download_button(
         label=f"📥 Скачать {export_format}",
-        data=data,
+        data=data if data else b"",
+        disabled=not data,
         file_name=f"macro_{'with' if export_which == 'С датами' else 'no'}_dates.{ext}",
         mime=mime,
         key="download_table",
