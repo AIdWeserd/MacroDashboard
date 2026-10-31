@@ -1,0 +1,42 @@
+name: macrodashboard
+
+x-runtime: &runtime
+  image: ${MACRO_IMAGE:-macrodashboard:local}
+  init: true
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment: &environment
+    MACRO_DATA_DIR: /app/data
+  volumes:
+    - ${MACRO_HOST_DATA_DIR:-./data}:/app/data
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=256m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  web:
+    <<: *runtime
+    ports:
+      - "${MACRO_BIND_ADDRESS:-127.0.0.1}:${MACRO_PORT:-8501}:8501"
+
+  updater:
+    <<: *runtime
+    command: ["python", "-m", "scripts.update_data"]
+    environment:
+      <<: *environment
+      MACRO_UPDATE_INTERVAL: ${MACRO_UPDATE_INTERVAL:-21600}
+      MACRO_UPDATE_TIMEOUT: ${MACRO_UPDATE_TIMEOUT:-14400}
+    stop_grace_period: 30s
+    # The image healthcheck belongs to Streamlit, not this background worker.
+    healthcheck:
+      disable: true

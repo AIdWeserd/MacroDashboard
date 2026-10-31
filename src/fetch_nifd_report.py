@@ -1,6 +1,7 @@
 import re
 import time
 import requests
+from config import DATA_DIR
 from pathlib import Path
 from bs4 import BeautifulSoup
 import pdfplumber
@@ -10,7 +11,7 @@ NIFD_LIST_URL = "http://www.nifd.cn/SeriesReport/SeriesReportList"
 NIFD_BASE = "http://www.nifd.cn"
 
 # Куда складывать скачанные PDF
-PDF_DIR = Path("data/nifd_reports")
+PDF_DIR = DATA_DIR / "nifd_reports"
 
 # Сколько страниц пагинации просматривать
 MAX_PAGES = 12
