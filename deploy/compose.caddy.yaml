@@ -1,0 +1,23 @@
+# Ubuntu/Linux: independent project, proxying the application's loopback port.
+name: macrodashboard-proxy
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MACRO_DOMAIN: ${MACRO_DOMAIN:?Set MACRO_DOMAIN in compose.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

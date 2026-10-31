@@ -1,0 +1,134 @@
+name: Check, build and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate workflow, shell scripts and Compose
+        run: |
+          docker run --rm --network none -v "$PWD/.github/workflows:/work:ro" \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 /work/pipeline.yaml
+          bash -n scripts/deploy.sh
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose -f compose.yaml -f compose.local.yaml config --quiet
+      - name: Build runtime image
+        run: |
+          docker build --tag macro-ci \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" .
+      - name: Offline tests and startup checks
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -e MACRO_DATA_DIR=/tmp/macro-tests \
+            -v "$PWD/tests:/app/tests:ro" macro-ci -m unittest discover -s tests -v
+          docker run --rm --network none --entrypoint python \
+            -e MACRO_DATA_DIR=/tmp/macro-check macro-ci -m scripts.check_app
+          docker run --rm --network none --entrypoint python macro-ci scheduler.py --list
+      - name: Test container health and HTTP
+        run: |
+          trap 'docker logs macro-smoke; docker rm -f macro-smoke' EXIT
+          docker run -d --name macro-smoke --read-only --tmpfs /tmp \
+            -e MACRO_DATA_DIR=/tmp/macro-smoke -p 127.0.0.1:8501:8501 macro-ci
+          for attempt in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Health.Status}}' macro-smoke)" = healthy ]; then
+              curl --fail http://127.0.0.1:8501/_stcore/health
+              exit 0
+            fi
+            echo "Waiting for Streamlit: $attempt/60"
+            sleep 2
+          done
+          exit 1
+      - name: Save tested image
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        run: docker save macro-ci | gzip > /tmp/image.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        with:
+          name: tested-image
+          path: /tmp/image.tar.gz
+          retention-days: 1
+
+  publish:
+    needs: check
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-image
+          path: /tmp
+      - name: Publish the tested image to GHCR
+        id: publish
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker load -i /tmp/image.tar.gz
+          docker tag macro-ci "$image:$GITHUB_SHA"
+          docker push "$image:$GITHUB_SHA"
+          digest=$(docker buildx imagetools inspect "$image:$GITHUB_SHA" --format '{{json .Manifest.Digest}}' | jq -r .)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "image=$image@$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure verified SSH connection
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Transfer release configuration and deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+          IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          release="/opt/macrodashboard/releases/$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          options=(-i ~/.ssh/id_ed25519 -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          # Variables below are intentionally expanded locally; release is generated, image is a validated digest.
+          # shellcheck disable=SC2029
+          ssh "${options[@]}" "$target" "umask 077; mkdir -p '$release'"
+          # shellcheck disable=SC2029
+          tar -czf - compose.yaml scripts/deploy.sh | ssh "${options[@]}" "$target" "tar -xzf - -C '$release'"
+          # shellcheck disable=SC2029
+          ssh "${options[@]}" "$target" "bash '$release/scripts/deploy.sh' '$release' '$IMAGE'"
+      - name: Remove local SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts

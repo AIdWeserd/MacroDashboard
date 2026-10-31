@@ -1,0 +1,6 @@
+# Local build only; production pulls the exact image digest from GHCR.
+services:
+  web:
+    build: .
+  updater:
+    build: .

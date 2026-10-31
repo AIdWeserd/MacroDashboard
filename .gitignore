@@ -24,3 +24,12 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Runtime data, backups and deployment credentials
+data/
+compose.env
+*.pem
+*.key
+*.db
+*.db-wal
+*.db-shm

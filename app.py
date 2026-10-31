@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from config import COUNTRIES, INDICATORS
 from src.storage import (
-    load_fred, load_rss, load_forexfactory, load_imf,
+    load_fred, load_rss, load_forexfactory, save_forexfactory, load_imf,
     load_eurostat, load_eurostat_unemployment,
     load_policy_rates,
 )
@@ -513,12 +513,21 @@ with st.expander("💰 Ставки ЦБ (исторические)", expanded=F
         )
 
 with st.expander("📅 Экономический календарь", expanded=False):
-    with st.spinner("Загружаю календарь..."):
-        try:
-            cal = fetch_calendar()
-        except Exception as e:
-            st.error(f"Ошибка: {e}")
-            cal = pd.DataFrame()
+    cal = load_forexfactory()
+    if st.button("Обновить календарь", key="refresh_calendar"):
+        with st.spinner("Загружаю календарь..."):
+            try:
+                updated_cal = fetch_calendar()
+                if not updated_cal.empty:
+                    save_forexfactory(updated_cal)
+                    cal = updated_cal
+                else:
+                    st.warning("Источник не вернул события. Сохранённые данные оставлены.")
+            except Exception:
+                st.warning("Источник календаря недоступен. Попробуйте обновить позже.")
+
+    if cal.empty:
+        st.info("Календарь пока пуст. Нажмите «Обновить календарь», чтобы загрузить события.")
 
     if not cal.empty:
         min_imp = st.slider("Мин. важность", 1, 3, 2, key="cal_imp")

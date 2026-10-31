@@ -5,6 +5,36 @@
 Проект автоматизирует сбор данных из официальных источников (национальные статслужбы, центральные банки, минфины,
 международные организации). Все данные сохраняются в локальную SQLite и отображаются в Streamlit-интерфейсе.
 
+## Разработка и эксплуатация
+
+- [Карта кода и архитектура](docs/ARCHITECTURE.md).
+- [Первый ручной запуск на Ubuntu с доменом и HTTPS](docs/MANUAL_DEPLOYMENT.md).
+  [HTML-версия с копированием команд](docs/manual-deployment.html).
+- [Переход с ручного запуска на GitHub Actions](docs/GITHUB_ACTIONS_MIGRATION.md)
+  ([HTML-гайд](docs/github-actions.html)): SSH, GHCR, secrets и первый откат.
+- [Деплой на ВМ Яндекс Облака через GitHub Actions](docs/DEPLOYMENT.md):
+  Docker, GHCR, SSH, порты, секреты, обновления, backup и откат.
+- Контекст для агентов: корневой `AGENTS.md` и файлы в соответствующих каталогах.
+
+Локальный Docker-запуск из корня; сначала заполните `.env` по `.env.example`:
+
+```bash
+docker compose -f compose.yaml -f compose.local.yaml up -d --build web
+```
+
+Открыть `http://localhost:8501`. Данные находятся в локальном `data/` и не входят
+в образ. В Linux каталог и существующие файлы должны быть доступны UID/GID 10001;
+для нового каталога: `sudo install -d -o 10001 -g 10001 -m 750 data`.
+Периодическое сетевое обновление включается отдельно:
+
+```bash
+docker compose -f compose.yaml -f compose.local.yaml up -d updater
+```
+
+Остановка: `docker compose down`; файлы данных сохраняются.
+Без Docker доступны прежние команды ниже. Для версий контейнера используйте
+`python -m pip install -r requirements.lock` в Python 3.12 на Linux.
+
 ## Принципы выбора источников
 
 1. Актуальность. Свежесть данных — приоритет. Если источник отстаёт на квартал, а есть альтернатива с задержкой в

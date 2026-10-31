@@ -144,6 +144,12 @@ def build_summary(year: int | None = None, month: int | None = None) -> pd.DataF
         row = {
             "country": country,
             "country_name": COUNTRY_NAMES.get(country, country),
+            # Схема должна сохраняться и до первой загрузки IMF/национальных данных.
+            "debt_gdp": None,
+            "budget_gdp": None,
+            "trade_gdp": None,
+            "gdp_growth": None,
+            "inflation_imf": None,
         }
 
         # IMF — базовые значения (годовые). Используется как fallback.
