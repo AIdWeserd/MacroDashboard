@@ -96,3 +96,14 @@ streamlit run app.py
 **Базовое правило:** лучше небольшое проверенное изменение с сохранением данных, чем крупная переделка работающей системы.
 
 Регрессионные проверки: `python -m unittest discover -s tests -v`; постоянные тесты находятся в `tests/`, а не в диагностическом `test.py`.
+
+## Контейнерная эксплуатация
+
+Точки входа остаются в корне. `scripts/`, `deploy/`, `docs/`, `.github/` и `tests/`
+содержат инструкции для своих каталогов; перед правками читать их `AGENTS.md`.
+Карта проекта — `docs/ARCHITECTURE.md`, деплой — `docs/DEPLOYMENT.md`.
+`MACRO_DATA_DIR` задаёт каталог SQLite и PDF NIFD; по умолчанию `data/` проекта.
+Контейнеры web/updater используют `/app/data` и UID/GID 10001. Образ устанавливает
+`requirements.lock` и Chromium в `/opt/playwright` для PDF-экспорта.
+Новые зависимости согласовывать между `requirements.txt`, lock-файлом и Dockerfile.
+PR запускает offline-проверки; push master публикует и выкладывает проверенный образ.

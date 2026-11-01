@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 from config import COUNTRIES, INDICATORS
 from src.storage import (
-    load_fred, load_rss, load_forexfactory, load_imf,
+    load_fred, load_rss, load_forexfactory, save_forexfactory, load_imf,
     load_eurostat, load_eurostat_unemployment,
     load_policy_rates,
     load_bloomberg,
@@ -687,11 +687,12 @@ with st.expander("💰 Ставки ЦБ (исторические)", expanded=F
 with st.expander("📅 Экономический календарь", expanded=False):
     # st.expander не откладывает выполнение кода. Запрашиваем ForexFactory
     # только по действию пользователя, а не при каждом обновлении Streamlit.
-    if st.button("🔄 Обновить календарь ForexFactory", key="calendar_refresh"):
+    if st.button("🔄 Обновить календарь ForexFactory", key="refresh_calendar"):
         with st.spinner("Загружаю календарь..."):
             try:
                 fresh_calendar = fetch_calendar()
                 if fresh_calendar is not None and not fresh_calendar.empty:
+                    save_forexfactory(fresh_calendar)
                     st.session_state["calendar_live"] = fresh_calendar
                     st.success("Календарь обновлён")
                 else:
@@ -747,7 +748,7 @@ with st.expander("📅 Экономический календарь", expanded=
                 )
                 st.divider()
     else:
-        st.caption("Календарь пока не загружен. Для запроса нажми кнопку выше.")
+        st.info("Календарь пока пуст. Нажмите «Обновить календарь», чтобы загрузить события.")
 
 with st.expander("📊 FRED (исторические ряды)", expanded=False):
     macro = load_fred()

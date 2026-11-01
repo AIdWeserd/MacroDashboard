@@ -23,3 +23,21 @@ backup_*/
 
 # Постоянные регрессионные тесты входят в репозиторий
 !tests/test_*.py
+
+# Сохранены исключения окружения и деплоя из master
+.vscode/
+venv/
+env/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+compose.env
+*.pem
+*.key
