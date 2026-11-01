@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from io import StringIO
+from src.euro_area_geo import all_requested_geos, keep_period_geo, EURO_AREA_GEOS
 
 # Eurostat SDMX 2.1 endpoint
 EUROSTAT_BASE = "https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/data"
@@ -20,7 +21,7 @@ COICOP_CORE = "TOT_X_NRG_FOOD"
 
 # Наши коды -> коды Eurostat
 COUNTRY_TO_GEO = {
-    "EU": "EU27_2020",
+    "EU": "EA21",
     "DE": "DE",
     "FR": "FR",
     "IT": "IT",
@@ -41,6 +42,7 @@ COUNTRY_TO_GEO = {
 }
 
 GEO_TO_COUNTRY = {v: k for k, v in COUNTRY_TO_GEO.items()}
+GEO_TO_COUNTRY.update({geo: "EU" for geo in EURO_AREA_GEOS})
 
 
 def _fetch_slice(unit: str, coicop: str) -> pd.DataFrame:
@@ -48,7 +50,7 @@ def _fetch_slice(unit: str, coicop: str) -> pd.DataFrame:
     Тянет один срез из PRC_HICP_MINR: фиксированные unit и coicop, все наши geo.
     Возвращает DataFrame с колонками: date, country, value.
     """
-    geo_list = "+".join(COUNTRY_TO_GEO.values())
+    geo_list = "+".join(all_requested_geos(COUNTRY_TO_GEO))
     key = f"{FREQ}.{unit}.{coicop}.{geo_list}"
     url = f"{EUROSTAT_BASE}/{DATASET}/{key}"
 
@@ -68,6 +70,7 @@ def _fetch_slice(unit: str, coicop: str) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     df = df.dropna(subset=["date", "value"])
+    df = keep_period_geo(df, "country", "date")
     df["country"] = df["country"].map(GEO_TO_COUNTRY).fillna(df["country"])
     return df
 
@@ -77,8 +80,9 @@ def fetch_eurostat_hicp() -> pd.DataFrame:
     Тянет HICP из Eurostat:
         value — YoY headline (RCH_A, TOTAL)
         mom   — MoM headline (RCH_M, TOTAL)
-        core  — YoY core    (RCH_A, TOT_X_NRG_FOOD)
-    Возвращает DataFrame с колонками: date, country, value, mom, core.
+        core      — YoY core    (RCH_A, TOT_X_NRG_FOOD)
+        core_mom  — MoM core    (RCH_M, TOT_X_NRG_FOOD)
+    Возвращает DataFrame с колонками: date, country, value, mom, core, core_mom.
     """
     try:
         yoy = _fetch_slice(UNIT_YOY, COICOP_HEADLINE)
@@ -87,6 +91,14 @@ def fetch_eurostat_hicp() -> pd.DataFrame:
     except Exception as e:
         print(f"[ERROR] Eurostat: {e}")
         return pd.DataFrame()
+
+    # Core MoM — опубликованный Eurostat RCH_M / TOT_X_NRG_FOOD.
+    # Отказ только этого ряда не должен ломать существующие HICP.
+    try:
+        core_mom = _fetch_slice(UNIT_MOM, COICOP_CORE)
+    except Exception as exc:
+        print(f"[WARN] Eurostat HICP Core MoM: {type(exc).__name__}")
+        core_mom = pd.DataFrame(columns=["date", "country", "value"])
 
     if yoy.empty:
         print("[WARN] Eurostat HICP: пусто (YoY headline)")
@@ -98,6 +110,9 @@ def fetch_eurostat_hicp() -> pd.DataFrame:
 
     df = yoy.merge(mom, on=["date", "country"], how="left")
     df = df.merge(core, on=["date", "country"], how="left")
+    core_mom = (core_mom.rename(columns={"value": "core_mom"})
+                if not core_mom.empty else pd.DataFrame(columns=["date", "country", "core_mom"]))
+    df = df.merge(core_mom, on=["date", "country"], how="left")
 
     # Оставляем последние 10 лет
     cutoff = pd.Timestamp.now() - pd.DateOffset(years=10)

@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from config import FRED_API_KEY
+from src.fred_safety import safe_source_error
 import time
 
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
@@ -70,6 +71,7 @@ def fetch_fred_cpi() -> pd.DataFrame:
         raise RuntimeError("FRED_API_KEY не задан")
 
     frames = []
+    issues = []
     for country, ids in FRED_CPI_SERIES.items():
         try:
             headline_id = ids["headline"]
@@ -78,7 +80,8 @@ def fetch_fred_cpi() -> pd.DataFrame:
             # --- Headline ---
             hl = _fetch_series(headline_id)
             if hl.empty:
-                print(f"[SKIP] FRED CPI {country} ({headline_id}): пусто")
+                print(f"[WARN] FRED CPI {country} ({headline_id}): пусто")
+                issues.append(f"{country}/{headline_id}")
                 continue
 
             hl["yoy"] = hl["level"].pct_change(periods=12) * 100
@@ -89,12 +92,19 @@ def fetch_fred_cpi() -> pd.DataFrame:
 
             # --- Core (опционально) ---
             if core_id:
-                cr = _fetch_series(core_id)
-                if not cr.empty:
-                    cr["core"] = cr["level"].pct_change(periods=12) * 100
-                    cr = cr[["date", "core"]]
-                    df = df.merge(cr, on="date", how="left")
-                else:
+                try:
+                    cr = _fetch_series(core_id)
+                    if cr.empty:
+                        issues.append(f"{country}/{core_id}")
+                        print(f"[WARN] FRED CPI {country} ({core_id}): пусто")
+                        df["core"] = pd.NA
+                    else:
+                        cr["core"] = cr["level"].pct_change(periods=12) * 100
+                        cr = cr[["date", "core"]]
+                        df = df.merge(cr, on="date", how="left")
+                except Exception as exc:
+                    issues.append(f"{country}/{core_id}")
+                    print(f"[WARN] FRED CPI {country} ({core_id}): {safe_source_error(exc)}")
                     df["core"] = pd.NA
             else:
                 df["core"] = pd.NA
@@ -104,7 +114,8 @@ def fetch_fred_cpi() -> pd.DataFrame:
             df = df.dropna(subset=["value"]).sort_values("date").reset_index(drop=True)
 
             if df.empty:
-                print(f"[SKIP] FRED CPI {country}: после расчёта YoY пусто")
+                print(f"[WARN] FRED CPI {country}: после расчёта YoY пусто")
+                issues.append(f"{country}/{headline_id}")
                 continue
 
             frames.append(df)
@@ -116,14 +127,17 @@ def fetch_fred_cpi() -> pd.DataFrame:
                 f"YoY={last['value']:.2f}, MoM={last['mom']:.2f}, Core={core_str}"
             )
 
-        except Exception as e:
-            print(f"[WARN] FRED CPI {country}: {e}")
+        except Exception as exc:
+            print(f"[WARN] FRED CPI {country}: {safe_source_error(exc)}")
+            issues.append(f"{country}/{ids['headline']}")
 
     if not frames:
-        return pd.DataFrame()
-
-    full = pd.concat(frames, ignore_index=True)
-    return full.sort_values(["country", "date"]).reset_index(drop=True)
+        result = pd.DataFrame(columns=["date", "country", "value", "mom", "core"])
+    else:
+        result = pd.concat(frames, ignore_index=True)
+        result = result.sort_values(["country", "date"]).reset_index(drop=True)
+    result.attrs["source_issues"] = tuple(issues)
+    return result
 
 
 if __name__ == "__main__":

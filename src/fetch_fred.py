@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from config import FRED_API_KEY, COUNTRIES, INDICATORS
+from src.fred_safety import safe_source_error
 
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -56,20 +57,34 @@ def fetch_fred(country: str, indicator: str) -> pd.DataFrame | None:
 
 
 def fetch_all_macro() -> pd.DataFrame:
-    """Проходит по всем странам и метрикам, собирает один DataFrame."""
+    """Собирает настроенные FRED-серии и сообщает о частичных сбоях.
+
+    Ненастроенные сочетания страны и показателя не являются ошибками.
+    Коды рядов, значения и методологии не меняются.
+    """
     frames = []
+    issues = []
     for country in COUNTRIES:
         for indicator in INDICATORS:
+            series_id = FRED_SERIES.get((country, indicator))
+            if series_id is None:
+                continue
+            label = f"{country}/{indicator} ({series_id})"
             try:
                 df = fetch_fred(country, indicator)
-                if df is not None and not df.empty:
-                    frames.append(df)
-                    print(f"[OK] {country}/{indicator}: {len(df)} строк")
-                else:
-                    print(f"[SKIP] {country}/{indicator}: нет серии в FRED")
-            except Exception as e:
-                print(f"[WARN] {country}/{indicator}: {e}")
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+                if df is None or df.empty:
+                    print(f"[WARN] FRED {label}: нет наблюдений")
+                    issues.append(label)
+                    continue
+                frames.append(df)
+                print(f"[OK] {label}: {len(df)} строк")
+            except Exception as exc:
+                print(f"[WARN] FRED {label}: {safe_source_error(exc)}")
+                issues.append(label)
+    result = (pd.concat(frames, ignore_index=True) if frames else
+              pd.DataFrame(columns=["date", "value", "country", "indicator"]))
+    result.attrs["source_issues"] = tuple(issues)
+    return result
 
 
 if __name__ == "__main__":

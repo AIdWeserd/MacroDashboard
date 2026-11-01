@@ -3,13 +3,16 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    MACRO_DATA_DIR=/app/data
+    MACRO_DATA_DIR=/app/data \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 
 WORKDIR /app
 RUN groupadd --gid 10001 macro \
     && useradd --uid 10001 --gid macro --create-home macro
 COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.lock && pip check
+RUN pip install --no-cache-dir -r requirements.lock && pip check \
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/playwright
 
 # Explicit allowlist: local data, credentials, drafts and tests never enter the image.
 COPY app.py scheduler.py config.py ./

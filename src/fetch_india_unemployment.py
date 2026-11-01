@@ -27,13 +27,13 @@ def fetch_india_unemployment() -> pd.DataFrame:
                 "filters": {
                     "indicator_code": 3,  # UR
                     "frequency_code": 3,  # Monthly
-                    "year": "2025,2026",
+                    "year": ",".join(str(y) for y in range(2025, pd.Timestamp.now().year + 1)),
                     "month_code": "1,2,4,5,6,7,8,9,10,11,12",
                     "state_code": 99,  # All India
                     "gender_code": 3,  # person
                     "age_code": 1,  # 15+
                     "sector_code": 3,  # rural + urban
-                    "limit": 100,
+                    "limit": max(100, 15 * (pd.Timestamp.now().year - 2025 + 1)),
                     "Format": "JSON",
                 },
             },

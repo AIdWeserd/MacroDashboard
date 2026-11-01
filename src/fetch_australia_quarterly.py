@@ -16,12 +16,12 @@ START_DATE = pd.Timestamp("2024-01-01")
 
 
 def _get(dataflow: str, key: str, start_period: str = "2024-Q1",
-         end_period: str = "2026-Q4", retries: int = 3) -> str:
+         end_period: str | None = None, retries: int = 3) -> str:
     """Скачивает CSV из ABS Data API."""
     url = f"{BASE}/ABS,{dataflow},1.0.0/{key}"
     params = {
         "startPeriod": start_period,
-        "endPeriod": end_period,
+        "endPeriod": end_period or f"{pd.Timestamp.now().year}-Q{pd.Timestamp.now().quarter}",
         "format": "csvfilewithlabels",
     }
     last_err = None

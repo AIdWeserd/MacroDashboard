@@ -1,20 +1,34 @@
-# Credentials and local configuration
+.venv/
+__pycache__/
+*.pyc
+.idea/
+data/
 .env
+*.log
+test_*.py
+weo_*.csv
+
+# Локальные SQLite и снимки для отката (не добавлять в Git)
+backups/
+backup_*/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Локальные конфигурации с секретами
 .env.*
 !.env.example
 
-# IDE settings
-.idea/
-.vscode/
+# Постоянные регрессионные тесты входят в репозиторий
+!tests/test_*.py
 
-# Python environments and bytecode
-.venv/
+# Сохранены исключения окружения и деплоя из master
+.vscode/
 venv/
 env/
-__pycache__/
 *.py[cod]
-
-# Tool caches and build output
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -24,12 +38,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
-
-# Runtime data, backups and deployment credentials
-data/
 compose.env
 *.pem
 *.key
-*.db
-*.db-wal
-*.db-shm

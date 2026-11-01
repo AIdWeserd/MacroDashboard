@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from config import FRED_API_KEY
+from src.fred_safety import safe_source_error
 
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -59,15 +60,21 @@ def fetch_fred_gdp() -> pd.DataFrame:
     Возвращает DataFrame с колонками: date, country, gdp_growth.
     """
     frames = []
+    issues = []
     for country, series_id in FRED_GDP_SERIES.items():
         try:
             df = _fetch_series(series_id)
             if df.empty:
-                print(f"[SKIP] FRED GDP {country} ({series_id}): пусто")
+                print(f"[WARN] FRED GDP {country} ({series_id}): пусто")
+                issues.append(f"{country}/{series_id}")
                 continue
 
             df["yoy"] = df["value"].pct_change(periods=4) * 100  # квартал к кварталу год назад
             df = df.dropna(subset=["yoy"])
+            if df.empty:
+                print(f"[WARN] FRED GDP {country} ({series_id}): нет годовых изменений")
+                issues.append(f"{country}/{series_id}")
+                continue
 
             df["country"] = country
             df = df.rename(columns={"yoy": "gdp_growth"})
@@ -78,14 +85,17 @@ def fetch_fred_gdp() -> pd.DataFrame:
             print(f"[OK] FRED GDP {country} ({series_id}): {len(df)} строк, "
                   f"последняя — {last['date'].date()}, YoY={last['gdp_growth']:.2f}")
 
-        except Exception as e:
-            print(f"[WARN] FRED GDP {country}: {e}")
+        except Exception as exc:
+            print(f"[WARN] FRED GDP {country} ({series_id}): {safe_source_error(exc)}")
+            issues.append(f"{country}/{series_id}")
 
     if not frames:
-        return pd.DataFrame()
-
-    full = pd.concat(frames, ignore_index=True)
-    return full.sort_values(["country", "date"]).reset_index(drop=True)
+        result = pd.DataFrame(columns=["date", "country", "gdp_growth"])
+    else:
+        result = pd.concat(frames, ignore_index=True)
+        result = result.sort_values(["country", "date"]).reset_index(drop=True)
+    result.attrs["source_issues"] = tuple(issues)
+    return result
 
 
 if __name__ == "__main__":

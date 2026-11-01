@@ -35,6 +35,23 @@ class CalendarTests(unittest.TestCase):
             self.assertTrue(any("недоступен" in item.value for item in app.warning))
             self.assertTrue(any("Saved event" in item.value for item in app.markdown))
 
+    def test_successful_refresh_saves_calendar(self):
+        fresh = pd.DataFrame([{
+            "datetime": pd.Timestamp("2026-10-11T12:00:00Z"),
+            "country": "EU", "currency": "EUR", "event": "New event",
+            "importance": 3, "actual": "1", "forecast": "2", "previous": "3",
+        }])
+        with patch("src.storage.load_forexfactory", return_value=pd.DataFrame()), \
+                patch("src.storage.save_forexfactory") as save, \
+                patch("src.fetch_forexfactory.fetch_calendar", return_value=fresh) as fetch:
+            app = self.app().run(timeout=30)
+            app.button(key="refresh_calendar").click().run(timeout=30)
+            self.assertFalse(app.exception)
+            fetch.assert_called_once()
+            save.assert_called_once()
+            pd.testing.assert_frame_equal(save.call_args.args[0], fresh)
+            self.assertTrue(any("New event" in item.value for item in app.markdown))
+
 
 if __name__ == "__main__":
     unittest.main()

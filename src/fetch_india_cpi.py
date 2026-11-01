@@ -33,9 +33,9 @@ def fetch_india_cpi() -> pd.DataFrame:
                     "division_code": 0,  # CPI (General)
                     "state_code": 1,  # All India
                     "sector_code": 3,  # Combined
-                    "year": "2025,2026",
+                    "year": ",".join(str(y) for y in range(2025, pd.Timestamp.now().year + 1)),
                     "month_code": "1,2,3,4,5,6,7,8,9,10,11,12",
-                    "limit": 100,
+                    "limit": max(100, 15 * (pd.Timestamp.now().year - 2025 + 1)),
                     "Format": "JSON",
                 },
             },

@@ -16,3 +16,9 @@ pdfplumber
 rba-mcp
 fastmcp
 curl_cffi
+lxml       # Чтение официальной HTML-таблицы RUONIA
+
+# Российские PDF/XLS и PDF-экспорт интерфейса
+pymupdf
+xlrd
+playwright
